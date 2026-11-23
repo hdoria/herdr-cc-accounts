@@ -801,6 +801,10 @@ export function isRunWrapper(argvLine, self = entryScript()) {
   return false;
 }
 
+// A wrapper of some other copy of the CLI: its environment names no account either, so `default` would be a
+// guess. Only the end of the path is looked at, which also catches a copy in a folder with spaces.
+const OTHER_WRAPPER = /(?:^|[\s/])cc-accounts run(?:\s|$)/;
+
 // The wrapper's own environment says nothing: the account is set only in the environment of the claude it
 // starts. So the answer comes from its children, and only when they all agree on a known account.
 /**
@@ -861,7 +865,9 @@ function cmdWhich(args) {
     }
     const name = isRunWrapper(argvLine)
       ? accountFromChildren(pid, known)
-      : accountFromEnvironment(pid, argvLine, known);
+      : OTHER_WRAPPER.test(argvLine)
+        ? UNKNOWN
+        : accountFromEnvironment(pid, argvLine, known);
     process.stdout.write(`${pid} ${name}\n`);
   }
   if (missing.length) throw new CliError(`process ${missing.join(", ")} not running`);

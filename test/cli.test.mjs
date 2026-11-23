@@ -1100,11 +1100,11 @@ describe("which", () => {
     }
   });
 
-  test("a name in the arguments is only trusted when argv[1] is this very script", async () => {
+  test("a wrapper of another copy of the CLI is unknown: its arguments prove nothing", async () => {
     const home = newHome();
     cc(home, ["add", "work"]);
     const child = await process_({ PATH: process.env.PATH, HOME: home }, ["/somewhere/cc-accounts", "run", "work"]);
-    assert.equal(which(home, child.pid).out.trim(), "default");
+    assert.equal(which(home, child.pid).out.trim(), "unknown");
   });
 
   test("the cc-accounts run wrapper and the claude it starts both resolve to the account", async () => {
