@@ -11,6 +11,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  readSync,
   readdirSync,
   readlinkSync,
   realpathSync,
@@ -21,6 +22,7 @@ import {
 } from "node:fs";
 import { constants as osConstants, userInfo } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
+import { isatty } from "node:tty";
 import { ACCOUNT_NAME, DEFAULT_ACCOUNT as DEFAULT, nameProblem } from "./model.js";
 
 // What each entry of ~/.claude becomes inside an account. The single source of truth.
@@ -643,6 +645,15 @@ function report(name, { changes, warnings }, out) {
 
 // ---- commands ----
 
+/** @param {string} dir */
+function divergentOrNone(dir) {
+  try {
+    return divergentFiles(dir);
+  } catch {
+    return [];
+  }
+}
+
 /** @param {string[]} args */
 function cmdLs(args) {
   const json = args.includes("--json");
@@ -656,6 +667,7 @@ function cmdLs(args) {
         dir,
         email: emailOf(dir ? join(dir, ".claude.json") : sourceState()),
         signedIn: isSignedIn({ dir }),
+        divergent: dir ? divergentOrNone(dir) : [],
       }));
   if (json) {
     process.stdout.write(`${JSON.stringify({ demo, accounts }, null, 2)}\n`);
@@ -824,11 +836,26 @@ function accountFromChildren(pid, known) {
   return answers.size === 1 && !answers.has(UNKNOWN) ? [...answers][0] : UNKNOWN;
 }
 
-// Separates argv from the environment by comparing `ps` with and without -E, and extracts only
-// CLAUDE_CONFIG_DIR. The result is matched against known accounts; text from `ps` is never echoed.
+// Separates argv from the environment by comparing `ps` with and without -E, and extracts only the value of
+// CLAUDE_CONFIG_DIR: "" when it is not set, null when it cannot be told. Text from `ps` is never echoed.
 // ps joins the variables with spaces, so a value can imitate a variable: a second CLAUDE_CONFIG_DIR= is
 // unknown. A single one whose value is followed by what looks like another variable cannot be told from a
-// value with spaces, and is read as the shorter one; the result is still only a known account name.
+// value with spaces, and is read as the shorter one.
+/**
+ * @param {string} pid
+ * @param {string} argvLine
+ * @returns {string | null}
+ */
+function configDirOf(pid, argvLine) {
+  const full = psLine(["-E", "-ww", "-o", "command=", "-p", pid]);
+  if (full === null || !full.startsWith(argvLine)) return null;
+  const environment = full.slice(argvLine.length);
+  if (!/^\s+\S/.test(environment)) return null;
+  if ((environment.match(/(?:^|\s)CLAUDE_CONFIG_DIR=/g) ?? []).length > 1) return null;
+  return /(?:^|\s)CLAUDE_CONFIG_DIR=(.*?)(?=\s[^\s=]+=|$)/.exec(environment)?.[1] ?? "";
+}
+
+// The result is matched against known accounts, so it is only ever a known account name or "unknown".
 /**
  * @param {string} pid
  * @param {string} argvLine
@@ -836,14 +863,10 @@ function accountFromChildren(pid, known) {
  * @returns {string}
  */
 function accountFromEnvironment(pid, argvLine, known) {
-  const full = psLine(["-E", "-ww", "-o", "command=", "-p", pid]);
-  if (full === null || !full.startsWith(argvLine)) return UNKNOWN;
-  const environment = full.slice(argvLine.length);
-  if (!/^\s+\S/.test(environment)) return UNKNOWN;
-  if ((environment.match(/(?:^|\s)CLAUDE_CONFIG_DIR=/g) ?? []).length > 1) return UNKNOWN;
-  const match = /(?:^|\s)CLAUDE_CONFIG_DIR=(.*?)(?=\s[^\s=]+=|$)/.exec(environment);
-  if (!match || match[1] === "") return known[0].name;
-  const real = realpathOrNull(match[1]);
+  const dir = configDirOf(pid, argvLine);
+  if (dir === null) return UNKNOWN;
+  if (dir === "") return known[0].name;
+  const real = realpathOrNull(dir);
   if (!real) return UNKNOWN;
   return known.find((a) => a.real === real)?.name ?? UNKNOWN;
 }
@@ -873,19 +896,200 @@ function cmdWhich(args) {
   if (missing.length) throw new CliError(`process ${missing.join(", ")} not running`);
 }
 
+// ---- remove ----
+
+// The names `sync` gives to what it moves aside: <entry>.divergent-<seconds>-<pid>-<6 hex digits>. Only these are
+// listed, so a name the user typed never reaches the terminal.
+const DIVERGENT_NAME = /^[A-Za-z0-9._-]+\.divergent-\d+-\d+-[0-9a-f]{6}$/;
+// `security` answers 44 (errSecItemNotFound) when the item is not there.
+const KEYCHAIN_NOT_FOUND = 44;
+const KEYCHAIN_TIMEOUT_MS = 60_000;
+const PROBE_TIMEOUT_MS = 5_000;
+const MAX_PROCESSES = 200;
+const MAX_ANSWER_BYTES = 256;
+
+/** @param {string} dir */
+export function divergentFiles(dir) {
+  return readdirSync(dir)
+    .filter((name) => DIVERGENT_NAME.test(name))
+    .sort();
+}
+
+// The account folder as it is on disk, only when it is a plain folder that sits directly inside the real accounts
+// root. A link is never followed and the root itself never qualifies, so a swapped entry cannot aim the removal
+// at ~/.claude or anywhere else.
+/**
+ * @param {string} dir
+ * @param {string} root
+ */
+export function removableFolder(dir, root) {
+  const real = realpathOrNull(dir);
+  const realRoot = realpathOrNull(root);
+  if (!lstatOrNull(dir)?.isDirectory() || !real || !realRoot || dirname(real) !== realRoot) {
+    throw new CliError(`${short(dir)} is not a plain folder inside ${short(root)}; refusing to remove it`);
+  }
+  return real;
+}
+
+/**
+ * @param {string[]} args
+ * @returns {string[] | null} the pids, or null when pgrep could not answer
+ */
+function pgrepPids(args) {
+  const r = spawnSync("pgrep", args, { encoding: "utf8", timeout: PROBE_TIMEOUT_MS });
+  if (r.error || r.status === null || r.status > 1) return null;
+  return r.status === 1 ? [] : r.stdout.split("\n").filter((line) => /^\d+$/.test(line));
+}
+
+// Whether a live process of this user runs in the account folder, read as `which` reads it: the environment of
+// every `claude` process and of the children of every `cc-accounts run` wrapper. Whatever cannot be read is
+// "unknown", never "free".
+/**
+ * @param {string} real
+ * @returns {{ state: "free" | "busy" } | { state: "unknown", why: string }}
+ */
+function accountUse(real) {
+  const owner = process.getuid ? ["-u", String(process.getuid())] : [];
+  const claudes = pgrepPids([...owner, "-x", "claude"]);
+  const wrappers = pgrepPids([...owner, "-f", "cc-accounts run"]);
+  if (claudes === null || wrappers === null)
+    return { state: "unknown", why: "the running processes could not be listed" };
+  const pids = new Set(claudes);
+  for (const pid of wrappers) {
+    const line = psLine(["-ww", "-o", "command=", "-p", pid]);
+    if (line === null) continue;
+    if (!isRunWrapper(line)) {
+      if (OTHER_WRAPPER.test(line)) return { state: "unknown", why: 'a "cc-accounts run" of another copy is running' };
+      continue;
+    }
+    const children = pgrepPids(["-P", pid]);
+    if (children === null || children.length === 0)
+      return { state: "unknown", why: 'a "cc-accounts run" wrapper has no claude to read yet' };
+    for (const child of children) pids.add(child);
+  }
+  if (pids.size > MAX_PROCESSES) return { state: "unknown", why: "too many claude processes to check" };
+  let blind = false;
+  for (const pid of pids) {
+    const line = psLine(["-ww", "-o", "command=", "-p", pid]);
+    if (line === null || line.trim() === "") continue;
+    const dir = configDirOf(pid, line);
+    if (dir === null) blind = true;
+    else if (dir !== "" && realpathOrNull(dir) === real) return { state: "busy" };
+  }
+  return blind ? { state: "unknown", why: "the environment of a claude process could not be read" } : { state: "free" };
+}
+
+// Deletes the account's login item. Only `delete-generic-password -s <service> -a <user>` is run, with no output
+// kept, so the secret is never requested. With CLAUDE_SECURESTORAGE_CONFIG_DIR set every account shares one item,
+// which therefore stays. The folder is kept when the Keychain fails for any reason but "not found".
+/**
+ * @param {string} dir
+ * @returns {string}
+ */
+function deleteLogin(dir) {
+  if (process.platform !== "darwin") return "none on this system (the login file goes with the folder)";
+  if (process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) {
+    return "not touched: CLAUDE_SECURESTORAGE_CONFIG_DIR is set, so every account shares one item";
+  }
+  const r = spawnSync("security", ["delete-generic-password", "-s", keychainService(dir), "-a", keychainUser()], {
+    stdio: "ignore",
+    timeout: KEYCHAIN_TIMEOUT_MS,
+  });
+  if (r.status === 0) return "item deleted";
+  if (r.status === KEYCHAIN_NOT_FOUND) return "no item found";
+  const why = r.error
+    ? hasCode(r.error, "ENOENT")
+      ? "security is not on PATH"
+      : "security could not run"
+    : `security exited ${r.status}`;
+  throw new CliError(`could not delete the Keychain item (${why}); the folder was kept`);
+}
+
+// One line typed at the terminal, read a byte at a time so nothing is buffered past it.
+function readAnswer() {
+  const bytes = [];
+  const one = Buffer.alloc(1);
+  while (bytes.length < MAX_ANSWER_BYTES) {
+    /** @type {number} */
+    let n;
+    try {
+      n = readSync(0, one, 0, 1, null);
+    } catch {
+      break;
+    }
+    if (n === 0 || one[0] === 10) break;
+    bytes.push(one[0]);
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/**
+ * @param {string} name
+ * @param {() => string} answer
+ * @param {Output} out
+ */
+export function confirmedByName(name, answer, out) {
+  out.write("Type the account name to confirm: ");
+  return answer().trim() === name;
+}
+
+/** @param {string[]} args */
+function cmdRemove(args) {
+  const yes = args.includes("--yes");
+  const rest = args.filter((a) => a !== "--yes");
+  const [name] = rest;
+  if (rest.length !== 1 || name.startsWith("-")) throw new CliError("usage: cc-accounts remove <name> [--yes]", 2);
+  validateName(name);
+  const dir = listAccounts().find((a) => a.name === name)?.dir;
+  if (!dir) throw new CliError(`account "${name}" does not exist`);
+  const real = removableFolder(dir, accountsRoot());
+  const divergent = divergentFiles(dir);
+  if (divergent.length > 0 && !yes) {
+    throw new CliError(
+      `${short(dir)} holds files that sync kept aside:\n  ${divergent.join("\n  ")}\n` +
+        "Copy what you want to keep, then run again with --yes",
+    );
+  }
+  if (!yes && !(isatty(0) && isatty(1))) {
+    throw new CliError(`no terminal to confirm on; run again with --yes to remove "${name}"`);
+  }
+  const use = accountUse(real);
+  if (use.state === "busy") throw new CliError(`account "${name}" is in use by a running Claude; close it first`);
+  if (use.state === "unknown") {
+    throw new CliError(`cannot tell whether account "${name}" is in use (${use.why}); nothing was removed`);
+  }
+  if (!yes) {
+    process.stdout.write(`This deletes ${short(dir)} and the account's login in the Keychain.\n`);
+    if (!confirmedByName(name, readAnswer, process.stdout)) throw new CliError("not confirmed; nothing was removed");
+  }
+  const keychain = deleteLogin(dir);
+  rmSync(dir, { recursive: true });
+  process.stdout.write(`removed account ${name}\n  folder: ${short(dir)}\n  keychain: ${keychain}\n`);
+  if (divergent.length > 0) process.stdout.write(`  deleted with it: ${divergent.join(", ")}\n`);
+}
+
 const USAGE = `cc-accounts: Claude Code accounts side by side
 
 usage:
   cc-accounts ls [--json]        list accounts: email, login status and folder
   cc-accounts add <name>         create an account and apply the sharing table
   cc-accounts sync [<name>]      reapply links and state (idempotent)
+  cc-accounts remove <name> [--yes]  delete an account: its folder and its Keychain item
   cc-accounts run <name> [args]  open claude in an account (default uses ~/.claude)
   cc-accounts which <pid>...     print "<pid> <account>" per claude process, "unknown" if not known
   cc-accounts demo on|off        list sample accounts instead of yours, for screenshots
 `;
 
 /** @type {Record<string, (args: string[]) => void>} */
-const COMMANDS = { ls: cmdLs, add: cmdAdd, sync: cmdSync, run: cmdRun, which: cmdWhich, demo: cmdDemo };
+const COMMANDS = {
+  ls: cmdLs,
+  add: cmdAdd,
+  sync: cmdSync,
+  remove: cmdRemove,
+  run: cmdRun,
+  which: cmdWhich,
+  demo: cmdDemo,
+};
 
 /** @param {string[]} argv */
 function execute(argv) {
