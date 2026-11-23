@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "extraKnownMarketplaces": {
+    "pstack-claude": {
+      "source": {
+        "source": "github",
+        "repo": "michael-denyer/pstack-claude",
+        "ref": "97d2ba2790822939ee43db0d7856219ea96c450d"
+      },
+      "autoUpdate": false
+    }
+  },
+  "enabledPlugins": {
+    "pstack@pstack-claude": true,
+    "mattpocock-skills@claude-plugins-official": true
+  }
+}
