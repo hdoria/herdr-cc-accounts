@@ -12,6 +12,7 @@ import {
   readdirSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -104,6 +105,7 @@ let stubBin;
 // delete-generic-password removes the service from that file (44 when it is not there), and exits with
 // CC_STUB_DELETE_FAIL instead when that is set. CC_STUB_WATCH names a folder: whether it still exists at the
 // moment of a delete is written to the log, which is how a test sees the order of Keychain and folder.
+// CC_STUB_DELETE_HANG names a file that receives the stub's pid, after which the stub sleeps instead of answering.
 const SECURITY_STUB = `#!/bin/sh
 [ -n "$CC_STUB_LOG" ] && printf '%s\\n' "$*" >> "$CC_STUB_LOG"
 command="$1"
@@ -117,6 +119,7 @@ if [ "$command" = "delete-generic-password" ]; then
     if [ -e "$CC_STUB_WATCH" ]; then echo "folder present at delete" >> "$CC_STUB_LOG"; else echo "folder gone at delete" >> "$CC_STUB_LOG"; fi
   fi
   [ -n "$CC_STUB_DELETE_FAIL" ] && exit "$CC_STUB_DELETE_FAIL"
+  if [ -n "$CC_STUB_DELETE_HANG" ]; then echo $$ > "$CC_STUB_DELETE_HANG"; exec sleep 30; fi
   if [ -n "$CC_STUB_KEYCHAIN" ] && grep -qxF -- "$service" "$CC_STUB_KEYCHAIN"; then
     grep -vxF -- "$service" "$CC_STUB_KEYCHAIN" > "$CC_STUB_KEYCHAIN.tmp"
     mv "$CC_STUB_KEYCHAIN.tmp" "$CC_STUB_KEYCHAIN"
@@ -131,9 +134,17 @@ exit 44
 // A stand-in for `pgrep`, so that \`remove\` never reads the environment of the real Claude processes of whoever runs
 // the tests. The lists it answers come from CC_STUB_CLAUDE_PIDS (for -x claude) and CC_STUB_WRAPPER_PIDS (for -f);
 // CC_STUB_PGREP_FAIL makes both fail. Every other call, such as -P <pid>, goes to the real pgrep.
+// CC_STUB_COUNT names a file that counts the \`-x claude\` calls: from the second on, the answer is
+// CC_STUB_CLAUDE_PIDS_LATER, which is how a test starts a Claude after the first look and before the delete.
 const PGREP_STUB = `#!/bin/sh
 case " $* " in
-  *" -x claude "*) list="$CC_STUB_CLAUDE_PIDS" ;;
+  *" -x claude "*)
+    list="$CC_STUB_CLAUDE_PIDS"
+    if [ -n "$CC_STUB_COUNT" ]; then
+      n=$(cat "$CC_STUB_COUNT" 2>/dev/null || echo 0)
+      echo $((n + 1)) > "$CC_STUB_COUNT"
+      [ "$n" -ge 1 ] && list="$CC_STUB_CLAUDE_PIDS_LATER"
+    fi ;;
   *" -f "*) list="$CC_STUB_WRAPPER_PIDS" ;;
   *) exec /usr/bin/pgrep "$@" ;;
 esac
@@ -1312,13 +1323,51 @@ describe("remove", () => {
     const log = join(root, `log${counter++}`);
     const env = { USER: "tester", CC_STUB_LOG: log, CC_STUB_KEYCHAIN: keychain, CC_STUB_WATCH: dir };
     const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []);
-    return { home, dir, keychain, calls, run: (args, extra = {}) => cc(home, args, { env: { ...env, ...extra } }) };
+    return {
+      home,
+      dir,
+      keychain,
+      calls,
+      env,
+      run: (args, extra = {}) => cc(home, args, { env: { ...env, ...extra } }),
+    };
   }
 
   const refused = (r, pattern) => {
     assert.notEqual(r.code, 0, r.out);
     assert.match(r.err, pattern);
   };
+
+  // `removeAccount` run in this process, with the environment a subprocess would get; undefined removes a variable.
+  function inProcess(t, extra, fn) {
+    const env = {
+      HOME: t.home,
+      PATH: `${stubBin}:${process.env.PATH}`,
+      ...t.env,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined,
+      ...extra,
+    };
+    const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    try {
+      return fn();
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+  const sink = () => ({
+    text: "",
+    write(chunk) {
+      this.text += chunk;
+    },
+  });
+  const ownOf = (t) => lsAccounts(t.run(["ls", "--json"]).out).find((a) => a.name === "work").divergent;
 
   // A process whose environment is exactly `env`: `env -i` keeps the coverage variables of the parent out of it.
   async function idle(env) {
@@ -1497,11 +1546,10 @@ describe("remove", () => {
     const t = setup();
     const kept = "settings.json.divergent-1700000000-4242-0a1b2c";
     writeFileSync(join(t.dir, kept), "mine\n");
-    writeFileSync(join(t.dir, "not-a-kept-one.divergent-x"), "ignored\n");
     const listed = lsAccounts(t.run(["ls", "--json"]).out).find((a) => a.name === "work");
     assert.deepEqual(listed.divergent, [kept]);
     const r = t.run(["remove", "work"]);
-    refused(r, /sync kept aside/);
+    refused(r, /holds content of its own/);
     assert.ok(r.err.includes(kept));
     assert.equal(existsSync(join(t.dir, kept)), true);
     const done = t.run(["remove", "work", "--yes"]);
@@ -1592,6 +1640,235 @@ describe("remove", () => {
     const unrelated = t.run(["remove", "work", "--yes"], { CC_STUB_WRAPPER_PIDS: String(stray.pid) });
     assert.equal(unrelated.code, 0, "a process that only matched the search is not a wrapper");
   });
+
+  test("a real entry where a shared link belongs is the account's own content: listed, and only --yes removes it", () => {
+    const t = setup();
+    const outside = join(t.home, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "keep.txt"), "keep\n");
+    rmSync(join(t.dir, "projects"));
+    mkdirSync(join(t.dir, "projects"));
+    writeFileSync(join(t.dir, "projects", "session.jsonl"), "mine\n");
+    rmSync(join(t.dir, "settings.json"));
+    writeFileSync(join(t.dir, "settings.json"), "{}\n");
+    rmSync(join(t.dir, "hooks"));
+    symlinkSync(outside, join(t.dir, "hooks"));
+    mkdirSync(join(t.dir, "agent-memory"));
+    writeFileSync(join(t.dir, "notes.txt"), "mine\n");
+    for (const quiet of ["cache", "sessions"]) mkdirSync(join(t.dir, quiet), { recursive: true });
+    writeFileSync(join(t.dir, "daemon.json"), "{}\n");
+    const mine = ["agent-memory", "hooks", "notes.txt", "projects", "settings.json"];
+    assert.deepEqual(ownOf(t), mine);
+    const r = t.run(["remove", "work"]);
+    refused(r, /holds content of its own/);
+    for (const name of mine) assert.ok(r.err.includes(name), name);
+    assert.equal(existsSync(join(t.dir, "projects", "session.jsonl")), true);
+    assert.deepEqual(
+      t.calls().filter((line) => line.startsWith("delete-")),
+      [],
+    );
+    const done = t.run(["remove", "work", "--yes"]);
+    assert.equal(done.code, 0, done.err);
+    assert.ok(done.out.includes(`deleted with it: ${mine.join(", ")}`));
+    assert.equal(existsSync(t.dir), false);
+    assert.equal(readFileSync(join(outside, "keep.txt"), "utf8"), "keep\n", "a link is removed, never followed");
+  });
+
+  test("a fresh account and the runtime state Claude writes into it are not content of its own", () => {
+    const t = setup();
+    for (const dir of ["cache", "sessions", "statsig", "telemetry"]) mkdirSync(join(t.dir, dir), { recursive: true });
+    writeFileSync(join(t.dir, ".credentials.json"), "{}\n");
+    writeFileSync(join(t.dir, ".last-cleanup"), "1\n");
+    assert.deepEqual(ownOf(t), []);
+    assert.equal(t.run(["remove", "work"]).code === 0, false, "still needs a terminal or --yes");
+    assert.equal(t.run(["remove", "work", "--yes"]).code, 0);
+  });
+
+  test("own content is listed by a printable name, one that cannot split the list or reach the terminal raw", () => {
+    const dir = join(root, `own${counter++}`);
+    mkdirSync(dir);
+    for (const name of ["a,b", "x\ny", "back\\slash", "caf\u00e9"]) writeFileSync(join(dir, name), "");
+    assert.deepEqual(cli.ownContent(dir), ["a\\u{2c}b", "back\\u{5c}slash", "caf\\u{e9}", "x\\u{a}y"]);
+  });
+
+  test("a CLAUDE_CONFIG_DIR that does not resolve to a folder is never read as free", async () => {
+    const t = setup();
+    for (const value of ["relative/dir", "~/.claude-accounts/work", join(t.home, "nowhere"), "."]) {
+      const child = await idle({ PATH: process.env.PATH, HOME: t.home, CLAUDE_CONFIG_DIR: value });
+      const r = t.run(["remove", "work", "--yes"], { CC_STUB_CLAUDE_PIDS: String(child.pid) });
+      refused(
+        r,
+        /cannot tell whether account "work" is in use \(the environment of a claude process could not be read\)/,
+      );
+      assert.equal(existsSync(t.dir), true, value);
+      child.kill();
+    }
+    assert.deepEqual(t.calls(), []);
+  });
+
+  test("--expect-own must be exactly what the account holds: another list refuses, the same list goes ahead", () => {
+    const t = setup();
+    writeFileSync(join(t.dir, "notes.txt"), "mine\n");
+    for (const args of [["--expect-own="], ["--expect-own=other.txt"], ["--expect-own", "notes.txt,more.txt"]]) {
+      refused(
+        t.run(["remove", "work", "--yes", ...args]),
+        /the content of "work" is not what was listed:\n {2}notes\.txt/,
+      );
+    }
+    assert.equal(existsSync(join(t.dir, "notes.txt")), true);
+    assert.deepEqual(t.calls(), []);
+    const done = t.run(["remove", "work", "--yes", "--expect-own", "notes.txt"]);
+    assert.equal(done.code, 0, done.err);
+    assert.equal(existsSync(t.dir), false);
+  });
+
+  test("--expect-own= on an account that holds nothing of its own goes ahead, and a list there does not", () => {
+    const t = setup();
+    refused(t.run(["remove", "work", "--yes", "--expect-own=gone.txt"]), /is not what was listed\nCheck it/);
+    assert.equal(existsSync(t.dir), true);
+    assert.equal(t.run(["remove", "work", "--yes", "--expect-own="]).code, 0);
+  });
+
+  test("--expect-own takes one list and needs a value", () => {
+    const t = setup();
+    refused(t.run(["remove", "work", "--yes", "--expect-own"]), /usage: cc-accounts remove/);
+    refused(t.run(["remove", "work", "--expect-own=a", "--expect-own=b"]), /usage: cc-accounts remove/);
+    assert.equal(existsSync(t.dir), true);
+  });
+
+  test("the processes are looked at again right before the Keychain is touched", async () => {
+    const t = setup();
+    const child = await idle({ PATH: process.env.PATH, HOME: t.home, CLAUDE_CONFIG_DIR: t.dir });
+    const r = t.run(["remove", "work", "--yes"], {
+      CC_STUB_COUNT: join(root, `count${counter++}`),
+      CC_STUB_CLAUDE_PIDS: "",
+      CC_STUB_CLAUDE_PIDS_LATER: String(child.pid),
+    });
+    refused(r, /account "work" is in use by a running Claude; close it first/);
+    assert.equal(existsSync(t.dir), true);
+    assert.deepEqual(t.calls(), [], "the Keychain is not touched");
+  });
+
+  test(
+    "a security that does not answer is stopped, the folder is kept and the item may still be there",
+    viaKeychain,
+    () => {
+      const t = setup();
+      const pidFile = join(root, `pid${counter++}`);
+      assert.throws(
+        () =>
+          inProcess(t, { CC_STUB_DELETE_HANG: pidFile }, () =>
+            cli.removeAccount("work", { yes: true }, { out: sink(), keychainTimeoutMs: 300 }),
+          ),
+        /security did not answer within 0\.3 s and was stopped; the Keychain item may still be there; the folder was kept/,
+      );
+      assert.equal(existsSync(t.dir), true);
+      assert.ok(readFileSync(t.keychain, "utf8").includes(service(t.dir)));
+      assert.throws(
+        () => process.kill(Number(readFileSync(pidFile, "utf8")), 0),
+        { code: "ESRCH" },
+        "the child is gone",
+      );
+    },
+  );
+
+  test("a missing security keeps the folder and says so", viaKeychain, () => {
+    const t = setup();
+    const bin = join(root, `nosecurity${counter++}`);
+    mkdirSync(bin);
+    symlinkSync("/bin/ps", join(bin, "ps"));
+    symlinkSync(join(stubBin, "pgrep"), join(bin, "pgrep"));
+    refused(
+      t.run(["remove", "work", "--yes"], { PATH: bin }),
+      /could not delete the Keychain item \(security is not on PATH\); the folder was kept/,
+    );
+    assert.equal(existsSync(t.dir), true);
+  });
+
+  test(
+    "a folder swapped for another after the checks is kept, and the person is told the Keychain step ran",
+    viaKeychain,
+    () => {
+      const t = setup();
+      const moved = `${t.dir}-moved`;
+      assert.throws(
+        () =>
+          inProcess(t, {}, () =>
+            cli.removeAccount(
+              "work",
+              { yes: true },
+              {
+                out: sink(),
+                beforeFolderCheck() {
+                  renameSync(t.dir, moved);
+                  mkdirSync(t.dir);
+                  writeFileSync(join(t.dir, "new.txt"), "new\n");
+                },
+              },
+            ),
+          ),
+        /changed after it was checked .*; the folder was kept\. Keychain: item deleted/,
+      );
+      assert.equal(readFileSync(join(t.dir, "new.txt"), "utf8"), "new\n");
+      assert.equal(existsSync(moved), true);
+      assert.equal(readFileSync(t.keychain, "utf8"), `${service(null)}\n`);
+    },
+  );
+
+  test("a folder swapped for a link after the checks is never followed", viaKeychain, () => {
+    const t = setup();
+    const outside = join(t.home, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "keep.txt"), "keep\n");
+    assert.throws(
+      () =>
+        inProcess(t, {}, () =>
+          cli.removeAccount(
+            "work",
+            { yes: true },
+            {
+              out: sink(),
+              beforeFolderCheck() {
+                renameSync(t.dir, `${t.dir}-moved`);
+                symlinkSync(outside, t.dir);
+              },
+            },
+          ),
+        ),
+      /changed after it was checked .*not a plain folder.*the folder was kept/,
+    );
+    assert.equal(readFileSync(join(outside, "keep.txt"), "utf8"), "keep\n");
+    assert.equal(lstatSync(t.dir).isSymbolicLink(), true);
+  });
+
+  test(
+    "a folder that cannot be deleted after the Keychain is said plainly, and removing again finishes it",
+    {
+      skip: (process.getuid?.() === 0 && "root can delete anything") || (process.platform !== "darwin" && "macOS only"),
+    },
+    () => {
+      const t = setup();
+      const locked = join(t.dir, "cache");
+      mkdirSync(locked);
+      writeFileSync(join(locked, "file"), "x\n");
+      chmodSync(locked, 0o500);
+      try {
+        const r = t.run(["remove", "work", "--yes"]);
+        refused(
+          r,
+          /the folder of "work" could not be removed \(E[A-Z]+\); the Keychain step already ran \(item deleted\)\. Run "cc-accounts remove work --yes" again to finish/,
+        );
+        assert.doesNotMatch(r.err, /node:internal|\n\s+at /);
+        assert.equal(existsSync(t.dir), true);
+      } finally {
+        chmodSync(locked, 0o700);
+      }
+      const again = t.run(["remove", "work", "--yes"]);
+      assert.equal(again.code, 0, again.err);
+      assert.match(again.out, /keychain: no item found/);
+      assert.equal(existsSync(t.dir), false);
+    },
+  );
 
   test("a link in place of the account folder is not an account and its target is never touched", () => {
     const t = setup();

@@ -1032,7 +1032,8 @@ describe("mod behavior", () => {
       assert.equal(MODEL.removable({ name: "a", dir: "/x/a" }, 0), true);
       assert.equal(MODEL.removable({ name: "a", dir: "/x/a" }, 1), false);
       assert.equal(MODEL.removable({ name: "default", dir: null }, 0), false);
-      assert.deepEqual(MODEL.removeArgs("a"), ["remove", "a", "--yes"]);
+      assert.deepEqual(MODEL.removeArgs("a", []), ["remove", "a", "--yes", "--expect-own="]);
+      assert.deepEqual(MODEL.removeArgs("a", ["x", "y"]), ["remove", "a", "--yes", "--expect-own=x,y"]);
       assert.deepEqual(MODEL.divergentOf({ name: "a", divergent: ["x", 3, "y"] }), ["x", "y"]);
       assert.deepEqual(MODEL.divergentOf({ name: "a" }), []);
       assert.deepEqual(MODEL.divergentOf(undefined), []);
@@ -1061,7 +1062,7 @@ describe("mod behavior", () => {
       draw(m);
       handler(m.handlers, "remove-spare")({}, cx);
       const drawn = draw(m);
-      assert.ok(drawn.includes("These files are deleted with the folder:"));
+      assert.ok(drawn.includes("Its own content is deleted with the folder:"));
       assert.ok(drawn.includes(KEPT));
     });
 
@@ -1081,7 +1082,7 @@ describe("mod behavior", () => {
         cli.map(([, args]) => args[0]),
         ["ls", "which", "remove", "ls", "which"],
       );
-      assert.deepEqual(cli[2], [CLI, ["remove", "spare", "--yes"]]);
+      assert.deepEqual(cli[2], [CLI, ["remove", "spare", "--yes", "--expect-own="], { timeout: 120000 }]);
       assert.ok(!world.store.get(DATA).accounts.some((a) => a.name === "spare"));
       assert.equal(m.mod.removal, null);
       assert.deepEqual(m.calls.run, []);
@@ -1155,6 +1156,49 @@ describe("mod behavior", () => {
       await Promise.all(pending);
       assert.ok(!m.calls.exec.some(([, args]) => args[0] === "remove"));
       assert.equal(m.mod.removal.error, "this account is gone or in use now");
+    });
+
+    test("when another copy holds the lock the read does not happen, and the CLI still gets the list that was shown", async () => {
+      world = panelWorld();
+      world.store.set(DATA, { ...world.store.get(DATA), accounts: withKept });
+      world.store.set(LOCK, { at: Date.now() });
+      world.exec = serving(() => ({
+        code: 1,
+        stdout: "",
+        stderr: 'cc-accounts: the content of "spare" is not what was listed\n',
+      }));
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-spare")({}, cx);
+      draw(m);
+      handler(m.handlers, "remove-confirm")({}, cx);
+      await Promise.all(pending);
+      assert.deepEqual(
+        m.calls.exec.map(([, args]) => args),
+        [["remove", "spare", "--yes", `--expect-own=${KEPT}`]],
+      );
+      assert.ok(m.mod.removal, "the question stays open");
+      assert.ok(draw(m).includes('the content of "spare" is not what was listed'));
+    });
+
+    test("a demo flag that shows up in the read before the removal stops it", async () => {
+      world = panelWorld();
+      world.exec = async (_command, args) => ({
+        code: 0,
+        stdout: args[0] === "ls" ? listing({ demo: true }) : "41 work\n",
+        stderr: "",
+      });
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-spare")({}, cx);
+      draw(m);
+      handler(m.handlers, "remove-confirm")({}, cx);
+      await Promise.all(pending);
+      assert.ok(!m.calls.exec.some(([, args]) => args[0] === "remove"));
+      assert.equal(m.mod.removal.error, "demo mode");
+      assert.equal(m.mod.removal.busy, false);
     });
 
     test("in demo mode the question opens, Remove runs nothing and says demo mode", () => {

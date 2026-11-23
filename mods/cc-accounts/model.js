@@ -164,13 +164,18 @@ export function failureText(text, fallback) {
  */
 export const removable = (account, panes) => typeof account.dir === "string" && panes === 0;
 
-// The files `sync` kept aside in the account's folder, as `ls --json` lists them.
+// The account's own content that goes with its folder (files `sync` kept aside, real files or folders where a link
+// belongs, anything unknown), as `ls --json` lists it in `divergent`.
 /** @param {Account | undefined} account */
 export const divergentOf = (account) =>
   Array.isArray(account?.divergent) ? account.divergent.filter((name) => typeof name === "string") : [];
 
-/** @param {string} name */
-export const removeArgs = (name) => ["remove", name, "--yes"];
+// `--expect-own` carries the list the person was shown; the CLI refuses when the folder holds anything else.
+/**
+ * @param {string} name
+ * @param {string[]} shown
+ */
+export const removeArgs = (name, shown) => ["remove", name, "--yes", `--expect-own=${shown.join(",")}`];
 
 /**
  * @param {number} n

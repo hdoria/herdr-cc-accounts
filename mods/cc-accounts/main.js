@@ -79,6 +79,8 @@ const LIVE_ROLES = ["chip", "toggle", "panel"];
 const POPUP_WIDTH = 340;
 const TIP = "A running process keeps its account. Switching opens a new process.";
 const DEMO_NOTE = "demo mode";
+// `remove` may wait on the Keychain for up to a minute, twice the default of exec.
+const REMOVE_TIMEOUT_MS = 120_000;
 
 /** @typedef {Record<string, string>} Theme */
 /** @typedef {{ input: import("gpui-base").InputState, busy: boolean, error: string | null }} AddForm */
@@ -94,14 +96,15 @@ const pathMessage = (text) => (/ENOENT|not found|127/i.test(text) ? "cc-accounts
 /**
  * @param {string[]} args
  * @param {string | null} known
+ * @param {{ timeout?: number }} [options]
  * @returns {Promise<{ cli: string, result: import("herdr").ExecResult }>}
  */
-async function cliExec(args, known) {
+async function cliExec(args, known, options) {
   /** @type {unknown} */
   let failure;
   for (const cli of known ? [known] : cliCandidates(appHome())) {
     try {
-      return { cli, result: await exec(cli, args) };
+      return { cli, result: await (options ? exec(cli, args, options) : exec(cli, args)) };
     } catch (e) {
       failure = e;
     }
@@ -690,7 +693,7 @@ export default class ClaudeCodeAccounts extends View {
 
   // ---- Removing an account: the trash icon asks inside the row, Remove runs `cc-accounts remove <name> --yes` ----
 
-  // The files that would go with the folder are the ones on screen now; Remove checks them again before it runs.
+  // The content that would go with the folder is what is on screen now; Remove checks it again before it runs.
   /**
    * @param {string} name
    * @param {Account | undefined} account
@@ -720,8 +723,10 @@ export default class ClaudeCodeAccounts extends View {
     void cx.spawn((cx) => this.remove(removal, cx));
   }
 
-  // Reads the list again first: if the files that would be deleted are not the ones the person was shown, the
-  // list is updated and the person confirms again. Then the CLI removes the Keychain item and the folder.
+  // Reads the list again first: if the content that would be deleted is not what the person was shown, the
+  // list is updated and the person confirms again. The read may not happen when another copy holds the lock, so
+  // the CLI gets the list the person saw and refuses on any difference. Then it removes the Keychain item and
+  // the folder.
   /**
    * @param {Removal} removal
    * @param {Cx} cx
@@ -729,6 +734,10 @@ export default class ClaudeCodeAccounts extends View {
   async remove(removal, cx) {
     try {
       await this.refresh(cx);
+      if (this.demo()) {
+        removal.error = DEMO_NOTE;
+        return;
+      }
       const v = this.view();
       if (v.error) {
         removal.error = v.error;
@@ -745,7 +754,9 @@ export default class ClaudeCodeAccounts extends View {
         removal.error = "The files changed. Check the list and confirm again.";
         return;
       }
-      const { result } = await cliExec(removeArgs(removal.name), shared(DATA_KEY)?.cli ?? null);
+      const { result } = await cliExec(removeArgs(removal.name, removal.divergent), shared(DATA_KEY)?.cli ?? null, {
+        timeout: REMOVE_TIMEOUT_MS,
+      });
       if (result.code !== 0) {
         removal.error = failureText(result.stderr || result.stdout, "cc-accounts remove failed");
         return;
@@ -1128,7 +1139,7 @@ export default class ClaudeCodeAccounts extends View {
     return out;
   }
 
-  // The question under the row of the account: what goes, the files that go with it, an error, Cancel and Remove.
+  // The question under the row of the account: what goes, the content that goes with it, an error, Cancel and Remove.
   /**
    * @param {Theme} t
    * @param {Account} a
@@ -1159,7 +1170,7 @@ export default class ClaudeCodeAccounts extends View {
         el.child(
           v_flex()
             .gap(2)
-            .child(div().text_size(s.label).text_color(t.muted).child("These files are deleted with the folder:"))
+            .child(div().text_size(s.label).text_color(t.muted).child("Its own content is deleted with the folder:"))
             .children(
               removal.divergent.map((name) =>
                 div().min_w(0).truncate().text_size(s.label).text_color(t.dim).child(name),

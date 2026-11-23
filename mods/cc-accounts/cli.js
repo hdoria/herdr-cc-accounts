@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { constants as osConstants, userInfo } from "node:os";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { isatty } from "node:tty";
 import { ACCOUNT_NAME, DEFAULT_ACCOUNT as DEFAULT, nameProblem } from "./model.js";
 
@@ -645,10 +645,12 @@ function report(name, { changes, warnings }, out) {
 
 // ---- commands ----
 
+// The `divergent` field of `ls --json` is the account's own content (see ownContent), under the name the panel
+// already reads. An unreadable folder lists nothing here, and `remove` then refuses by itself.
 /** @param {string} dir */
-function divergentOrNone(dir) {
+function ownOrNone(dir) {
   try {
-    return divergentFiles(dir);
+    return ownContent(dir);
   } catch {
     return [];
   }
@@ -667,7 +669,7 @@ function cmdLs(args) {
         dir,
         email: emailOf(dir ? join(dir, ".claude.json") : sourceState()),
         signedIn: isSignedIn({ dir }),
-        divergent: dir ? divergentOrNone(dir) : [],
+        divergent: dir ? ownOrNone(dir) : [],
       }));
   if (json) {
     process.stdout.write(`${JSON.stringify({ demo, accounts }, null, 2)}\n`);
@@ -898,20 +900,52 @@ function cmdWhich(args) {
 
 // ---- remove ----
 
-// The names `sync` gives to what it moves aside: <entry>.divergent-<seconds>-<pid>-<6 hex digits>. Only these are
-// listed, so a name the user typed never reaches the terminal.
+// The names `sync` gives to what it moves aside: <entry>.divergent-<seconds>-<pid>-<6 hex digits>.
 const DIVERGENT_NAME = /^[A-Za-z0-9._-]+\.divergent-\d+-\d+-[0-9a-f]{6}$/;
-// `security` answers 44 (errSecItemNotFound) when the item is not there.
+// `security` answers 44 (errSecItemNotFound) when the item is not there. 44 is the low byte of the OSStatus -25300.
 const KEYCHAIN_NOT_FOUND = 44;
 const KEYCHAIN_TIMEOUT_MS = 60_000;
 const PROBE_TIMEOUT_MS = 5_000;
 const MAX_PROCESSES = 200;
 const MAX_ANSWER_BYTES = 256;
 
+// A name as it is shown and compared: whatever is not plain printable ASCII, a backslash or a comma becomes
+// \u{hex}, so a name typed by someone else never reaches the terminal as it is and the list never splits wrongly.
+/** @param {string} name */
+const printable = (name) => name.replace(/[^\x21-\x7e]|[\\,]/gu, (c) => `\\u{${c.codePointAt(0)?.toString(16)}}`);
+
+// Runtime state that goes with the folder without a word: the table's private entries. `agent-memory` is the
+// exception, memory that agents wrote and the person may want.
+/** @param {string} name */
+const discardable = (name) => classify(name) === "private" && !name.startsWith("agent-memory");
+
+// Whether an entry that should be a link to ~/.claude is that link.
+/**
+ * @param {string} path
+ * @param {string} name
+ */
+function isExpectedLink(path, name) {
+  try {
+    return lstatSync(path).isSymbolicLink() && readlinkSync(path) === join(sourceDir(), name);
+  } catch {
+    return false;
+  }
+}
+
+// The account's own content: what removal would delete that is neither runtime state nor the link the sharing
+// table puts there. That is every `.divergent-*` file, every shared entry that is a real file or folder (or a
+// link elsewhere) and anything the table does not know. Names come back printable and sorted.
 /** @param {string} dir */
-export function divergentFiles(dir) {
+export function ownContent(dir) {
   return readdirSync(dir)
-    .filter((name) => DIVERGENT_NAME.test(name))
+    .filter((name) => {
+      if (DIVERGENT_NAME.test(name)) return true;
+      if (SHARING.link.includes(name) || SHARING.history.includes(name)) {
+        return lstatOrNull(join(dir, name)) !== null && !isExpectedLink(join(dir, name), name);
+      }
+      return !discardable(name);
+    })
+    .map(printable)
     .sort();
 }
 
@@ -974,34 +1008,51 @@ function accountUse(real) {
     if (line === null || line.trim() === "") continue;
     const dir = configDirOf(pid, line);
     if (dir === null) blind = true;
-    else if (dir !== "" && realpathOrNull(dir) === real) return { state: "busy" };
+    else if (dir !== "") {
+      // A value that is relative, starts with "~" or does not resolve says where Claude looks only to the shell
+      // that wrote it, so it is never "free".
+      const where = isAbsolute(dir) ? realpathOrNull(dir) : null;
+      if (where === null) blind = true;
+      else if (where === real) return { state: "busy" };
+    }
   }
   return blind ? { state: "unknown", why: "the environment of a claude process could not be read" } : { state: "free" };
 }
 
 // Deletes the account's login item. Only `delete-generic-password -s <service> -a <user>` is run, with no output
 // kept, so the secret is never requested. With CLAUDE_SECURESTORAGE_CONFIG_DIR set every account shares one item,
-// which therefore stays. The folder is kept when the Keychain fails for any reason but "not found".
+// which therefore stays. The folder is kept when the Keychain fails for any reason but "not found". A `security`
+// that does not answer in time is killed, and then it is not known whether the item went.
 /**
  * @param {string} dir
+ * @param {number} timeoutMs
  * @returns {string}
  */
-function deleteLogin(dir) {
+function deleteLogin(dir, timeoutMs) {
   if (process.platform !== "darwin") return "none on this system (the login file goes with the folder)";
   if (process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) {
     return "not touched: CLAUDE_SECURESTORAGE_CONFIG_DIR is set, so every account shares one item";
   }
   const r = spawnSync("security", ["delete-generic-password", "-s", keychainService(dir), "-a", keychainUser()], {
     stdio: "ignore",
-    timeout: KEYCHAIN_TIMEOUT_MS,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
   if (r.status === 0) return "item deleted";
   if (r.status === KEYCHAIN_NOT_FOUND) return "no item found";
+  if (hasCode(r.error, "ETIMEDOUT")) {
+    throw new CliError(
+      `security did not answer within ${timeoutMs / 1000} s and was stopped; ` +
+        "the Keychain item may still be there; the folder was kept",
+    );
+  }
   const why = r.error
     ? hasCode(r.error, "ENOENT")
       ? "security is not on PATH"
       : "security could not run"
-    : `security exited ${r.status}`;
+    : r.signal
+      ? `security was stopped by ${r.signal}`
+      : `security exited ${r.status}`;
   throw new CliError(`could not delete the Keychain item (${why}); the folder was kept`);
 }
 
@@ -1033,39 +1084,122 @@ export function confirmedByName(name, answer, out) {
   return answer().trim() === name;
 }
 
-/** @param {string[]} args */
-function cmdRemove(args) {
-  const yes = args.includes("--yes");
-  const rest = args.filter((a) => a !== "--yes");
+const REMOVE_USAGE = "usage: cc-accounts remove <name> [--yes] [--expect-own=<name,...>]";
+
+/** @param {string} list */
+const splitList = (list) => (list === "" ? [] : list.split(",").sort());
+
+/**
+ * @param {string[]} args
+ * @returns {{ name: string, yes: boolean, expectOwn: string[] | null }}
+ */
+function parseRemoveArgs(args) {
+  let yes = false;
+  /** @type {string[] | null} */
+  let expectOwn = null;
+  /** @type {string[]} */
+  const rest = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--yes") yes = true;
+    else if (arg === "--expect-own" || arg.startsWith("--expect-own=")) {
+      const value = arg === "--expect-own" ? args[++i] : arg.slice("--expect-own=".length);
+      if (value === undefined || expectOwn !== null) throw new CliError(REMOVE_USAGE, 2);
+      expectOwn = splitList(value);
+    } else rest.push(arg);
+  }
   const [name] = rest;
-  if (rest.length !== 1 || name.startsWith("-")) throw new CliError("usage: cc-accounts remove <name> [--yes]", 2);
+  if (rest.length !== 1 || name.startsWith("-")) throw new CliError(REMOVE_USAGE, 2);
+  return { name, yes, expectOwn };
+}
+
+/** @param {string} dir */
+function identityOf(dir) {
+  const stat = lstatSync(dir);
+  return `${stat.dev}:${stat.ino}`;
+}
+
+// What the person confirmed: the account's own content (see ownContent) goes only with --yes, and with
+// --expect-own it must be exactly the list the caller was shown. Hooks exist for the tests.
+/**
+ * @param {string} name
+ * @param {{ yes?: boolean, expectOwn?: string[] | null }} [options]
+ * @param {{ out?: Output, answer?: () => string, keychainTimeoutMs?: number, beforeFolderCheck?: () => void }} [hooks]
+ */
+export function removeAccount(name, { yes = false, expectOwn = null } = {}, hooks = {}) {
+  const { out = process.stdout, answer = readAnswer, keychainTimeoutMs = KEYCHAIN_TIMEOUT_MS } = hooks;
   validateName(name);
+  assertSafeRoot();
   const dir = listAccounts().find((a) => a.name === name)?.dir;
   if (!dir) throw new CliError(`account "${name}" does not exist`);
   const real = removableFolder(dir, accountsRoot());
-  const divergent = divergentFiles(dir);
-  if (divergent.length > 0 && !yes) {
+  const identity = identityOf(dir);
+  const own = ownContent(dir);
+  if (expectOwn !== null && expectOwn.join(",") !== own.join(",")) {
     throw new CliError(
-      `${short(dir)} holds files that sync kept aside:\n  ${divergent.join("\n  ")}\n` +
+      `the content of "${name}" is not what was listed${own.length > 0 ? `:\n  ${own.join("\n  ")}` : ""}\n` +
+        "Check it and confirm again; nothing was removed",
+    );
+  }
+  if (own.length > 0 && !yes) {
+    throw new CliError(
+      `${short(dir)} holds content of its own, deleted with it:\n  ${own.join("\n  ")}\n` +
         "Copy what you want to keep, then run again with --yes",
     );
   }
   if (!yes && !(isatty(0) && isatty(1))) {
     throw new CliError(`no terminal to confirm on; run again with --yes to remove "${name}"`);
   }
+  assertNotInUse(name, real);
+  if (!yes) {
+    out.write(`This deletes ${short(dir)} and the account's login in the Keychain.\n`);
+    if (!confirmedByName(name, answer, out)) throw new CliError("not confirmed; nothing was removed");
+    if (ownContent(dir).join(",") !== own.join(",")) {
+      throw new CliError("the content of the account changed while waiting; nothing was removed");
+    }
+  }
+  assertNotInUse(name, real);
+  const keychain = deleteLogin(dir, keychainTimeoutMs);
+  hooks.beforeFolderCheck?.();
+  try {
+    assertSafeRoot();
+    removableFolder(dir, accountsRoot());
+    if (identityOf(dir) !== identity) throw new CliError(`${short(dir)} is not the folder that was checked`);
+  } catch (e) {
+    throw new CliError(
+      `the account folder changed after it was checked (${messageOf(e)}); the folder was kept. ` +
+        `Keychain: ${keychain}`,
+    );
+  }
+  try {
+    rmSync(dir, { recursive: true });
+  } catch (e) {
+    const code = e instanceof Error && "code" in e ? String(e.code) : "unknown error";
+    throw new CliError(
+      `the folder of "${name}" could not be removed (${code}); the Keychain step already ran (${keychain}). ` +
+        `Run "cc-accounts remove ${name} --yes" again to finish`,
+    );
+  }
+  out.write(`removed account ${name}\n  folder: ${short(dir)}\n  keychain: ${keychain}\n`);
+  if (own.length > 0) out.write(`  deleted with it: ${own.join(", ")}\n`);
+}
+
+/**
+ * @param {string} name
+ * @param {string} real
+ */
+function assertNotInUse(name, real) {
   const use = accountUse(real);
   if (use.state === "busy") throw new CliError(`account "${name}" is in use by a running Claude; close it first`);
   if (use.state === "unknown") {
     throw new CliError(`cannot tell whether account "${name}" is in use (${use.why}); nothing was removed`);
   }
-  if (!yes) {
-    process.stdout.write(`This deletes ${short(dir)} and the account's login in the Keychain.\n`);
-    if (!confirmedByName(name, readAnswer, process.stdout)) throw new CliError("not confirmed; nothing was removed");
-  }
-  const keychain = deleteLogin(dir);
-  rmSync(dir, { recursive: true });
-  process.stdout.write(`removed account ${name}\n  folder: ${short(dir)}\n  keychain: ${keychain}\n`);
-  if (divergent.length > 0) process.stdout.write(`  deleted with it: ${divergent.join(", ")}\n`);
+}
+
+/** @param {string[]} args */
+function cmdRemove(args) {
+  const { name, yes, expectOwn } = parseRemoveArgs(args);
+  removeAccount(name, { yes, expectOwn });
 }
 
 const USAGE = `cc-accounts: Claude Code accounts side by side
