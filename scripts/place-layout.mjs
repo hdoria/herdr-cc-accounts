@@ -181,7 +181,9 @@ function apply(root) {
   if (states.toggle === "absent") {
     const row = targetRow(root, (c) => c?.content?.mod === "tabs", 'the "tabs" block', SHIPPED_HINT);
     edits.push(() => {
-      const at = row.children.findIndex((c) => c.id === "skillshare-toggle");
+      // Before the last toggle button of another mod, so the buttons keep the order they already had; at the
+      // end of the row when there is none.
+      const at = row.children.findLastIndex((c) => c.content?.props?.role === "toggle");
       row.children.splice(at === -1 ? row.children.length : at, 0, toggle);
     });
     notes.push("toggle added to the tab bar row");

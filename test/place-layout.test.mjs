@@ -64,8 +64,8 @@ describe("place-layout", () => {
     const r = place(["apply", "--file", file]);
     assert.equal(r.code, 0, r.err);
     const layout = read(file);
-    assert.deepEqual(childrenOf(layout, "tabs-row"), ["tabs", "cc-accounts-toggle", "skillshare-toggle"]);
-    assert.deepEqual(childrenOf(layout, "work-body"), ["main", "cc-accounts-panel", "panel", "skillshare-panel"]);
+    assert.deepEqual(childrenOf(layout, "tabs-row"), ["tabs", "cc-accounts-toggle", "other-toggle"]);
+    assert.deepEqual(childrenOf(layout, "work-body"), ["main", "cc-accounts-panel", "panel", "other-panel"]);
     const toggle = layout.children[1].children[0].children[1];
     assert.deepEqual(toggle, {
       id: "cc-accounts-toggle",
@@ -87,6 +87,25 @@ describe("place-layout", () => {
       },
     );
     assert.deepEqual(panel.children[0].content, { mod: "cc-accounts", props: { role: "panel" } });
+  });
+
+  test("with several toggles in the row it goes before the last one", () => {
+    const file = copyOf("with-toggle-neighbor");
+    const layout = read(file);
+    const row = layout.children[1].children[0];
+    row.children.splice(1, 0, {
+      id: "first-toggle",
+      type: "block",
+      content: { mod: "first", props: { role: "toggle" } },
+    });
+    writeFileSync(file, `${JSON.stringify(layout, null, 2)}\n`);
+    assert.equal(place(["apply", "--file", file]).code, 0);
+    assert.deepEqual(childrenOf(read(file), "tabs-row"), [
+      "tabs",
+      "first-toggle",
+      "cc-accounts-toggle",
+      "other-toggle",
+    ]);
   });
 
   test("without a neighbor the toggle goes to the end of the row", () => {
@@ -138,7 +157,7 @@ describe("place-layout", () => {
     const after = read(file);
     assert.ok(!ids(after).some((id) => id.startsWith("cc-accounts")));
     assert.ok(ids(after).includes("mine"));
-    assert.ok(ids(after).includes("skillshare-toggle"));
+    assert.ok(ids(after).includes("other-toggle"));
   });
 
   test("a node with our id and other content aborts both apply and remove, and the file is untouched", () => {

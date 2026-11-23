@@ -40,13 +40,13 @@
               }
             },
             {
-              "id": "skillshare-toggle",
+              "id": "other-toggle",
               "type": "block",
               "size": {
                 "px": 118
               },
               "content": {
-                "mod": "skillshare",
+                "mod": "other",
                 "props": {
                   "role": "toggle"
                 }
@@ -88,17 +88,17 @@
               ]
             },
             {
-              "id": "skillshare-panel",
+              "id": "other-panel",
               "type": "column",
               "size": {
                 "px": 400
               },
               "children": [
                 {
-                  "id": "skillshare",
+                  "id": "other",
                   "type": "block",
                   "content": {
-                    "mod": "skillshare"
+                    "mod": "other"
                   }
                 }
               ]

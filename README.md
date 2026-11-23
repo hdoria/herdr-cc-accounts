@@ -69,7 +69,7 @@ In each new account, open a tab with `cc-accounts run <name>` and use `/login`. 
 
 `./install.sh --layout` runs `scripts/place-layout.mjs apply` on the layout Herdr is showing (the `layout` key of `~/.config/herdr-app/shared.json`; `HERDR_APP_HOME` is honored). It adds two nodes, and only these:
 
-- `cc-accounts-toggle`, a 140 px block in the row that holds the `tabs` block, right before a `skillshare-toggle` if there is one, else at the end of the row. It shows a round 16 px avatar with the initial of the account of the focused pane, in a color picked from the theme's `ansi1` to `ansi6` by the account's name (the same account always gets the same color), and the account's name beside it. When the focused pane is not running a local Claude it shows a generic accounts icon and `Accounts`. A long name ends in an ellipsis. The button has the "on" look of the skillshare button while the panel is open, and a tooltip with the account's status. Clicking it runs `layout.toggle` on the panel. An older 150 px toggle written by this script is resized by the next `--layout`.
+- `cc-accounts-toggle`, a 140 px block in the row that holds the `tabs` block, right before the last toggle button of another mod if the row has one, else at the end of the row. It shows a round 16 px avatar with the initial of the account of the focused pane, in a color picked from the theme's `ansi1` to `ansi6` by the account's name (the same account always gets the same color), and the account's name beside it. When the focused pane is not running a local Claude it shows a generic accounts icon and `Accounts`. A long name ends in an ellipsis. The button has the "on" look of a toggle while the panel is open, and a tooltip with the account's status. Clicking it runs `layout.toggle` on the panel. An older 150 px toggle written by this script is resized by the next `--layout`.
 - `cc-accounts-panel`, a column of 360 px (min 300, max 600), hidden at first, in the row that holds the `content.tab == "active"` block, right after that block.
 
 The script is idempotent. Before writing it saves `<layout>.bak-<epoch in ms>-<6 random hex digits>` (copied with `COPYFILE_EXCL`, so an existing backup is never overwritten), writes through a symbolic link to the real file and keeps its mode. It also notes the file's `inode:size:mtime` when it reads it and aborts, leaving the file as it is, if that changed before the rename, for example because Herdr or you saved the layout meanwhile; run it again. If an id it needs already exists with other content, or it cannot find the two target rows, it aborts and changes nothing. An unknown argument exits with code 2, every other refusal with code 1. `./install.sh --remove` takes out exactly the nodes it inserted (and refuses if you edited them). Run `node scripts/place-layout.mjs apply --dry-run [--file <layout.json>]` to see the resulting JSON without writing.
@@ -103,7 +103,7 @@ in the `children` of the row that holds `tabs`, and
 
 right after the `main` block (`"content": { "tab": "active" }`) in the `children` of the row that holds it.
 
-The panel is laid out like the skillshare panel:
+The panel is laid out like this:
 
 - A header with the accounts icon, `Claude accounts`, a chip (`this pane · <account>`, or `no Claude here`) and a close button that runs `layout.hide`.
 - A strip of numbers: `Accounts`, `In use`, `Panes`, and `Needs login` only when at least one account has no login, in the `blocked` color.
