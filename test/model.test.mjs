@@ -203,13 +203,16 @@ describe("which panes use which account", () => {
     );
   });
 
-  test("the counts come from the live Claude panes, each pid once", () => {
-    const local = Object.fromEntries(Object.entries(byPid).filter(([pid]) => pid !== "46"));
-    assert.deepEqual(countPanes(terminals, local), { work: 2, default: 1 });
-    assert.deepEqual(
-      countPanes([...terminals, { address: "t7", foreground: { name: "claude", argv: ["claude"], pid: 41 } }], local),
-      { work: 2, default: 1 },
-    );
+  test("the counts are the lengths of the lists: a terminal in no pane or on another machine is not counted", () => {
+    const state = { terminals, panes, spaces, byPid, focus: null };
+    assert.deepEqual(countPanes(state), { work: 2, default: 1 });
+    const listed = accountPanes(state);
+    for (const [name, n] of Object.entries(countPanes(state))) assert.equal(listed[name].length, n);
+    const orphan = { address: "t7", foreground: { name: "claude", argv: ["claude"], pid: 47 } };
+    assert.deepEqual(countPanes({ ...state, terminals: [...terminals, orphan], byPid: { ...byPid, 47: "default" } }), {
+      work: 2,
+      default: 1,
+    });
   });
 
   test("a click goes to the space, then the tab, then the pane; without a pane it focuses the terminal", () => {

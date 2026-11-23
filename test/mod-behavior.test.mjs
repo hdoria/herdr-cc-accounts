@@ -446,6 +446,8 @@ describe("mod behavior", () => {
       { address: "t4", foreground: { name: "zsh", argv: ["-zsh"], pid: 44 } },
       claude(45, "m/t5"),
     ];
+    world.panes = ["t1", "t2", "t3", "t4"].map((terminal, i) => ({ pane: `p${i}`, terminal, tab: "tab1", cwd: "/w" }));
+    world.spaces = [{ id: "s1", name: "my-app", machine: null, tabs: [{ id: "tab1", name: "claude" }] }];
     const asked = [];
     world.exec = async (command, args) => {
       if (command === CLI) asked.push(args);

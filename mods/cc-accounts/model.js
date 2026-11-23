@@ -231,25 +231,6 @@ export function parseWhich(text, accounts) {
 /** @param {string | null | undefined} address */
 export const localAddress = (address) => Boolean(address) && !String(address).includes("/");
 
-// Panes per account from the pids the last read resolved and the terminals that are Claude right now.
-/**
- * @param {Terminal[]} terminals
- * @param {Record<string, string>} byPid
- */
-export function countPanes(terminals, byPid) {
-  /** @type {Record<string, number>} */
-  const counts = {};
-  const seen = new Set();
-  for (const t of terminals) {
-    const pid = localAddress(t.address) ? claudePid(t) : null;
-    if (pid === null || seen.has(pid)) continue;
-    seen.add(pid);
-    const name = byPid[String(pid)];
-    if (name) counts[name] = (counts[name] ?? 0) + 1;
-  }
-  return counts;
-}
-
 // The three states. A pane running Claude in an account wins: the account is in use, with or without a login,
 // and says so. Only `signedIn: true` counts as a login; an old CLI that omits the field does not claim it.
 /**
@@ -418,6 +399,17 @@ export function accountPanes({ terminals, panes, spaces, byPid, focus }) {
   }
   return byAccount;
 }
+
+// Panes per account, counted from the same panes accountPanes lists, so the number always matches the list: a
+// terminal that is in no pane, or in a space of another machine, is not counted.
+/**
+ * @param {Parameters<typeof accountPanes>[0]} state
+ * @returns {Record<string, number>}
+ */
+export const countPanes = (state) =>
+  Object.fromEntries(
+    Object.entries(accountPanes({ ...state, focus: null })).map(([name, items]) => [name, items.length]),
+  );
 
 /** @param {PaneItem[]} items */
 export const paneTooltip = (items) =>

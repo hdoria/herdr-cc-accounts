@@ -411,7 +411,7 @@ export default class ClaudeCodeAccounts extends View {
         : {};
     return {
       accounts: d.accounts ?? [],
-      counts: countPanes(terminals(), byPid),
+      counts: countPanes({ terminals: terminals(), panes: panes(), spaces: spaces(), byPid, focus: null }),
       current: p.current ?? (focus ? (byPid[String(focus.pid)] ?? null) : null),
       session: p.session ?? (focus && d.focusPid === focus.pid ? d.session : null),
       error: d.error ?? null,
