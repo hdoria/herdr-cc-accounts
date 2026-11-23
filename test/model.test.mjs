@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  ADD_ROW_HEIGHT,
+  LOGIN_TASK,
   MAX_POPUP_HEIGHT,
   accountPanes,
   accountStatus,
@@ -9,8 +11,12 @@ import {
   cliCandidates,
   countPanes,
   demoView,
+  failureText,
   goToCommands,
   groupAccounts,
+  loginTab,
+  nameProblem,
+  newAccountProblem,
   paneTooltip,
   parseListing,
   parseWhich,
@@ -278,5 +284,58 @@ describe("demoView", () => {
     const text = JSON.stringify(demoView(accounts));
     assert.ok(!/\/Users\/|\/home\/(?!demo\/)/.test(text), text);
     assert.match(demoView(accounts).session.id, /^0{8}-0{4}-4000-8000-0{12}$/);
+  });
+});
+
+describe("nameProblem", () => {
+  test("a valid name has no problem, and the three rules each have their own words", () => {
+    for (const name of ["work", "2-work", "a", "x-y-z"]) assert.equal(nameProblem(name), null, name);
+    for (const name of ["", "Work", "a b", "a_b", "-work", "../x", "work\n"]) {
+      assert.match(nameProblem(name) ?? "", /^invalid name ".*": use lowercase letters, digits and hyphens/s, name);
+    }
+    assert.equal(
+      nameProblem("default", { reserved: ["default"] }),
+      '"default" is reserved: it is the default account, in ~/.claude',
+    );
+    assert.equal(nameProblem("work", { existing: ["work"] }), '"work" already exists');
+    assert.equal(nameProblem("work", { reserved: ["default"], existing: ["spare"] }), null);
+  });
+
+  test("the form asks about the accounts on screen: default, its display name and every existing one", () => {
+    const listed = [
+      { name: "personal", dir: null },
+      { name: "work", dir: "/x/work" },
+    ];
+    assert.equal(newAccountProblem("fresh", listed), null);
+    assert.match(newAccountProblem("default", listed) ?? "", /reserved/);
+    assert.match(newAccountProblem("personal", listed) ?? "", /reserved/);
+    assert.match(newAccountProblem("work", listed) ?? "", /already exists/);
+    assert.match(newAccountProblem("Fresh", listed) ?? "", /^invalid name/);
+    assert.match(newAccountProblem("default", []) ?? "", /reserved/);
+  });
+});
+
+describe("loginTab and failureText", () => {
+  test("the login tab is named after the account and opens Claude in it with /login as its first message", () => {
+    assert.deepEqual(loginTab("/app/cc-accounts", "work"), {
+      name: "work login",
+      argv: ["/app/cc-accounts", "run", "work"],
+      task: LOGIN_TASK,
+      focus: true,
+    });
+    assert.equal(LOGIN_TASK, "/login");
+  });
+
+  test("a failure shows the first line, short, without the program's prefix", () => {
+    assert.equal(failureText("cc-accounts: disk is full\nmore\n", "x"), "disk is full");
+    assert.equal(failureText("\n  \n  second\n", "x"), "second");
+    assert.equal(failureText("a".repeat(500), "x").length, 120);
+    assert.equal(failureText("", "fallback"), "fallback");
+    assert.equal(failureText(null, "fallback"), "fallback");
+  });
+
+  test("the popup has room for the Add account item", () => {
+    const one = groupAccounts([{ name: "work", signedIn: true }], {}, null);
+    assert.ok(popupHeight(one, null) >= 60 + 26 + 50 + ADD_ROW_HEIGHT);
   });
 });

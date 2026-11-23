@@ -95,7 +95,66 @@
 /** @typedef {Section & { items: Account[] }} AccountGroup */
 
 export const ACCOUNT_NAME = /^[a-z0-9][a-z0-9-]*$/;
+export const DEFAULT_ACCOUNT = "default";
+export const LOGIN_TASK = "/login";
 export const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Why a name cannot become an account, or null when it can. The CLI and the add form both ask this one question:
+// `reserved` names belong to the default account and `existing` ones are accounts already (the CLI's `add`
+// accepts those and leaves them as they are, so only the form passes them).
+/**
+ * @param {string} name
+ * @param {{ reserved?: string[], existing?: string[] }} [taken]
+ * @returns {string | null}
+ */
+export function nameProblem(name, { reserved = [], existing = [] } = {}) {
+  if (!ACCOUNT_NAME.test(name)) {
+    return `invalid name "${name}": use lowercase letters, digits and hyphens, starting with a letter or digit`;
+  }
+  if (reserved.includes(name)) return `"${name}" is reserved: it is the default account, in ~/.claude`;
+  if (existing.includes(name)) return `"${name}" already exists`;
+  return null;
+}
+
+// The add form's check, against the accounts the last read listed. The default account is the one with no folder
+// of its own, and it can carry a display name other than "default".
+/**
+ * @param {string} name
+ * @param {Account[]} accounts
+ */
+export function newAccountProblem(name, accounts) {
+  const shown = accounts.find((a) => a.dir === null)?.name;
+  return nameProblem(name, {
+    reserved: shown ? [DEFAULT_ACCOUNT, shown] : [DEFAULT_ACCOUNT],
+    existing: accounts.map((a) => a.name),
+  });
+}
+
+// The tab that logs an account in: Claude opens in it and /login is its first message.
+/**
+ * @param {string} cli
+ * @param {string} name
+ */
+export const loginTab = (cli, name) => ({
+  name: `${name} login`,
+  argv: [cli, "run", name],
+  task: LOGIN_TASK,
+  focus: true,
+});
+
+// What a failed `cc-accounts add` leaves on screen: its first line, short, without the program's own prefix.
+/**
+ * @param {string | null | undefined} text
+ * @param {string} fallback
+ */
+export function failureText(text, fallback) {
+  const line = String(text ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .find(Boolean);
+  const bare = line?.replace(/^cc-accounts: /, "");
+  return bare ? clip(bare, 120) : fallback;
+}
 
 /**
  * @param {number} n
@@ -271,6 +330,8 @@ export function avatarSlot(name) {
 export const ROW_HEIGHT = 50;
 export const SECTION_HEIGHT = 26;
 export const POPUP_CHROME = 44 + 16;
+export const ADD_ROW_HEIGHT = 40;
+export const ADD_POPUP_HEIGHT = 230;
 export const MAX_POPUP_HEIGHT = 480;
 
 // An overlay cannot resize after opening, so the height is computed up front. Past the cap the list scrolls.
@@ -280,7 +341,7 @@ export const MAX_POPUP_HEIGHT = 480;
  */
 export function popupHeight(sections, error) {
   const rows = sections.reduce((n, s) => n + s.items.length, 0);
-  const body = POPUP_CHROME + sections.length * SECTION_HEIGHT + rows * ROW_HEIGHT + (error ? 24 : 0);
+  const body = POPUP_CHROME + sections.length * SECTION_HEIGHT + rows * ROW_HEIGHT + ADD_ROW_HEIGHT + (error ? 24 : 0);
   return Math.min(MAX_POPUP_HEIGHT, body);
 }
 

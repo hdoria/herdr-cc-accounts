@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { constants as osConstants, userInfo } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
+import { ACCOUNT_NAME, DEFAULT_ACCOUNT as DEFAULT, nameProblem } from "./model.js";
 
 // What each entry of ~/.claude becomes inside an account. The single source of truth.
 const SHARING = Object.freeze({
@@ -114,8 +115,6 @@ const SHARING = Object.freeze({
   union: ["allowedTools", "enabledMcpjsonServers", "disabledMcpjsonServers"],
 });
 
-const ACCOUNT_NAME = /^[a-z0-9][a-z0-9-]*$/;
-const DEFAULT = "default";
 const UNKNOWN = "unknown";
 
 /** @typedef {Record<string, unknown>} JsonObject */
@@ -234,15 +233,8 @@ function defaultName() {
 
 /** @param {string | undefined} name */
 function validateName(name) {
-  if (!name || !ACCOUNT_NAME.test(name)) {
-    throw new CliError(
-      `invalid name "${name ?? ""}": use lowercase letters, digits and hyphens, starting with a letter or digit`,
-      2,
-    );
-  }
-  if (name === DEFAULT || name === defaultName()) {
-    throw new CliError(`"${name}" is reserved: it is the default account, in ~/.claude`, 2);
-  }
+  const problem = nameProblem(name ?? "", { reserved: [DEFAULT, defaultName()] });
+  if (problem) throw new CliError(problem, 2);
 }
 
 /** @returns {AccountRef[]} */

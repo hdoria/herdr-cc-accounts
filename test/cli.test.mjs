@@ -25,6 +25,7 @@ const MOD = join(dirname(fileURLToPath(import.meta.url)), "..", "mods", "cc-acco
 const BIN = join(MOD, "cc-accounts");
 const CLI = pathToFileURL(join(MOD, "cli.js")).href;
 const cli = await import(CLI);
+const { nameProblem } = await import(pathToFileURL(join(MOD, "model.js")).href);
 const lsAccounts = (text) => JSON.parse(text).accounts;
 
 const DIRECTORIES = [
@@ -258,6 +259,15 @@ describe("add and sync", () => {
       assert.notEqual(cc(home, ["add", name]).code, 0, `"${name}" should be refused`);
     }
     assert.throws(() => readdirSync(join(home, ".claude-accounts")));
+  });
+
+  test("the CLI refuses the names the add form refuses, with the same words", () => {
+    const home = newHome();
+    for (const name of ["Work", "a b", "../x", "default", "-work", "a_b"]) {
+      const expected = nameProblem(name, { reserved: ["default"] });
+      assert.ok(expected, name);
+      assert.equal(cc(home, ["add", name]).err.trim(), `cc-accounts: ${expected}`);
+    }
   });
 
   test("a name may start with a digit and contain hyphens", () => {
@@ -1134,6 +1144,7 @@ describe("which", () => {
     mkdirSync(spaced, { recursive: true });
     cpSync(BIN, join(spaced, "cc-accounts"));
     cpSync(join(MOD, "cli.js"), join(spaced, "cli.js"));
+    cpSync(join(MOD, "model.js"), join(spaced, "model.js"));
     chmodSync(join(spaced, "cc-accounts"), 0o755);
     symlinkSync(join(spaced, "cc-accounts"), join(home, "linked cc-accounts"));
     const script = join(spaced, "cc-accounts");
