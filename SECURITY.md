@@ -8,6 +8,7 @@ It runs these programs:
 
 - Its own CLI, `mods/cc-accounts/cc-accounts` (Node), through Herdr's `exec`.
 - `ps` (with `-E` to read one process's environment) and `pgrep -P`, to find which account a Claude process runs in.
+- `pgrep -u <uid> -x claude` and `pgrep -u <uid> -f "cc-accounts run"`, only when you remove an account, to find out whether a process of yours uses it. They list pids only; the environment of a process is read with `ps -E` and only the value of `CLAUDE_CONFIG_DIR` is kept.
 - On macOS, `security find-generic-password -s <service> -a <user>`, to ask whether a login exists. Only the exit code is used. It is never run with `-w` or `-g`, so the secret is never requested, and nothing reads a token, a credential file or a Keychain value.
 - On macOS, `security delete-generic-password -s <service> -a <user>`, only when you remove an account with `cc-accounts remove` (or the panel's trash icon). It deletes the Keychain item of that one account and nothing else, with its output ignored and never with `-w` or `-g`. If `CLAUDE_SECURESTORAGE_CONFIG_DIR` is set, the item is shared by every account and is not deleted.
 - `claude`, only when you start it with `cc-accounts run <name>`.

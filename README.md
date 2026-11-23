@@ -12,7 +12,7 @@ Switching with `/login` changes the account for the whole machine. Here every ac
 
 - The **default account** is the one you already have: `~/.claude`, with `CLAUDE_CONFIG_DIR` unset.
 - Every other account is a folder, `~/.claude-accounts/<name>/`. The filesystem is the registry: there is no config file that can drift.
-- Claude Code keeps each folder's login in its own credential store (on macOS, a Keychain item whose name carries a hash of the folder; see "How it is known" below). The login itself is never read or copied: no token, no credential file, no Keychain item is touched. One thing does travel, though: the `mcpServers` replicated from `~/.claude.json` can carry secrets in their `env` or `headers`, and they are written into each account's `.claude.json` (mode 0600). Treat every account folder as holding the same MCP secrets as `~/.claude.json`.
+- Claude Code keeps each folder's login in its own credential store (on macOS, a Keychain item whose name carries a hash of the folder; see "How it is known" below). The login itself is never read or copied: no token, no credential file and no Keychain item is touched, except that `cc-accounts remove` deletes the Keychain item of the one account you remove (see [What `remove` does](#what-remove-does)). One thing does travel, though: the `mcpServers` replicated from `~/.claude.json` can carry secrets in their `env` or `headers`, and they are written into each account's `.claude.json` (mode 0600). Treat every account folder as holding the same MCP secrets as `~/.claude.json`.
 - What is yours rather than the account's (skills, agents, commands, hooks, plugins, output styles, `CLAUDE.md`, `settings.json`, `keybindings.json`) is shared by symbolic links to `~/.claude`.
 - History (`projects`, `plans`, `todos`, `file-history`, `shell-snapshots`, `history.jsonl`) is linked too, so `--resume` finds a conversation started in any account.
 - Account state (`.credentials.json`, `.claude.json`, `sessions`, caches and the rest of the runtime) is never linked.
@@ -129,9 +129,9 @@ The header's `+` and the footer's `Add account` open a form at the top of the li
 
 ### Removing an account from the panel
 
-The trash icon is in the panel only, never in the popup. It is missing on the default account and on an account that a pane uses. A click opens a question inside the row: `Remove <name>? Its login is deleted from the Keychain.`, with **Cancel**, **Remove** (in the `blocked` color) and, when `sync` kept files aside in that folder, the list of those `.divergent-*` files, which go with the folder.
+The trash icon is in the panel only, never in the popup. It is missing on the default account and on an account that a pane uses. A click opens a question inside the row: `Remove <name>? Its login is deleted from the Keychain.`, with **Cancel**, **Remove** (in the `blocked` color) and, when the folder holds content of its own (see [What counts as the account's own content](#what-counts-as-the-accounts-own-content)), the list of it, which goes with the folder.
 
-- **Remove** reads the list again first. If the files that would be deleted are not the ones you were shown, it stops, shows the new list and waits for you to confirm again. Otherwise it runs `cc-accounts remove <name> --yes` and reads the list again. The button reads `Removing…` meanwhile.
+- **Remove** reads the list again first. If the content that would be deleted is not what you were shown, it stops, shows the new list and waits for you to confirm again. That read is not what the safety rests on: another copy of the mod may hold the read lock, and then no read happens. So it always runs `cc-accounts remove <name> --yes --expect-own=<the names you were shown, separated by commas>` (empty when none were shown), and the CLI refuses when the folder holds anything else. After a successful removal it reads the list again. The button reads `Removing…` meanwhile, and the command may take up to 120 seconds (its limit in the panel) because the Keychain can make it wait. If the first read shows demo mode, Remove runs nothing and says `demo mode`.
 - **An error** (the account is in use by a Claude outside Herdr, the Keychain refused) stays in the row, short, and nothing is closed.
 - **In demo mode** the question opens, but Remove runs nothing and says `demo mode`.
 - A block can start with the question open with `props.remove` set to the account's name. That is how the tests check it with `herdr-app check`.
@@ -177,7 +177,7 @@ The popup has the same rows and sections as the panel, without the numbers strip
 
 | Command                              | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cc-accounts ls [--json]`            | Lists the accounts with the logged-in email, whether there is a login and the folder. `--json` prints `{ "demo": false, "accounts": [{ name, dir, email, signedIn, divergent }] }`, where `divergent` lists the `.divergent-*` files `sync` kept aside in the account's folder; `demo` is `true` only in demo mode.                                                                                                                                           |
+| `cc-accounts ls [--json]`            | Lists the accounts with the logged-in email, whether there is a login and the folder. `--json` prints `{ "demo": false, "accounts": [{ name, dir, email, signedIn, divergent }] }`, where `divergent` lists the account's own content (see [What counts as the account's own content](#what-counts-as-the-accounts-own-content); the field kept the name the panel reads, and it still holds the `.divergent-*` files); `demo` is `true` only in demo mode.   |
 | `cc-accounts add <name>`             | Creates `~/.claude-accounts/<name>` and applies the sharing table. A name matches `^[a-z0-9][a-z0-9-]*$` and cannot be `default` or the configured default name.                                                                                                                                                                                                                                                                                              |
 | `cc-accounts remove <name> [--yes]`  | Deletes an account: its Keychain item first, then its folder. See [What `remove` does](#what-remove-does).                                                                                                                                                                                                                                                                                                                                                    |
 | `cc-accounts sync [<name>]`          | Reapplies links and state. With no name, every account. The second run prints `nothing to change`. It also warns when the shared `settings.json` sets `apiKeyHelper`, `env.ANTHROPIC_API_KEY` or `env.ANTHROPIC_AUTH_TOKEN`, since those apply to every account (names only, never values).                                                                                                                                                                   |
@@ -207,16 +207,29 @@ Claude can replace a link with a regular file when it writes (for example `setti
 
 Entries of `~/.claude` that are in no list are not linked. `sync` reports them as "unclassified" so you can decide where they go in the table.
 
+### What counts as the account's own content
+
+`remove` deletes the folder, so it first lists what is in it that exists nowhere else, and asks for `--yes` (and the panel for its confirmation) before it goes on. An entry of the account folder counts as its own content when it is:
+
+- a `.divergent-*` file, which `sync` moved aside;
+- an entry of the link or history table that is not the link `sync` puts there: a real file or folder (a `projects/` of its own, a `settings.json` Claude wrote), or a link that points somewhere else;
+- anything the sharing table does not know.
+
+What does not count, and goes with the folder without a word, is the private state of the table: `.credentials.json`, `.claude.json`, `sessions`, `session-env`, `statsig`, `telemetry`, `logs`, `debug`, `cache`, `backups` and the other runtime entries listed as private in `mods/cc-accounts/cli.js`, plus any name starting with `.` or `daemon`. The one exception is `agent-memory*`, memory that agents wrote: it counts as content. Names are shown with anything that is not plain printable ASCII, a backslash or a comma written as `\u{hex}`.
+
 ### What `remove` does
 
-`cc-accounts remove <name> [--yes]` is the one way to delete an account that leaves nothing behind. In this order:
+`cc-accounts remove <name> [--yes] [--expect-own=<name,...>]` is the one way to delete an account that leaves nothing behind. In this order:
 
-1. It refuses the default account (and the name it is shown under), an invalid name and an account that does not exist. A link in place of an account folder is not an account.
-2. It refuses when the folder holds `.divergent-*` files (content `sync` moved aside, which you may want to keep), and lists them. With `--yes` it goes ahead and names them in its answer.
+1. It refuses the default account (and the name it is shown under), an invalid name and an account that does not exist. A link in place of an account folder is not an account. It also refuses a folder that is not a plain folder directly inside the real `~/.claude-accounts`, and notes which folder it is (device and inode).
+2. It lists the account's own content (see above). With `--expect-own` it refuses unless that list is exactly the one given, in any order; `--expect-own=` means "nothing". Without `--yes` it refuses when the list is not empty. With `--yes` it goes ahead and names the content in its answer.
 3. Without `--yes` it asks for a terminal and for the account's name typed in. With no terminal it refuses, so a script has to say `--yes`.
-4. It refuses when a live process of yours has `CLAUDE_CONFIG_DIR` pointing at the folder. It reads that as `which` does, over `pgrep -x claude` and the children of every `cc-accounts run` wrapper. When it cannot tell (`pgrep` fails, an environment cannot be read, a wrapper has no `claude` yet, a wrapper of another copy of the CLI runs), it refuses and says why.
-5. On macOS it deletes the Keychain item with `security delete-generic-password -s <service> -a <user>`, no output kept, never with `-w` or `-g`. The service is the one `ls` looks for. An item that is not there is not an error. With `CLAUDE_SECURESTORAGE_CONFIG_DIR` set the item is shared by every account, so it is left alone and the answer says so. Any other failure stops the command and the folder stays. Elsewhere the login file goes with the folder.
-6. It deletes the folder, only when its real path is a plain folder directly inside the real `~/.claude-accounts`. The links to `~/.claude` are removed as links; their targets are never followed, and `~/.claude` stays byte for byte as it was.
+4. It refuses when a live process of yours has `CLAUDE_CONFIG_DIR` pointing at the folder. It reads that as `which` does, over `pgrep -u <uid> -x claude`, `pgrep -u <uid> -f "cc-accounts run"` and the children of every `cc-accounts run` wrapper (`pgrep -P`). When it cannot tell, it refuses and says why: `pgrep` fails, an environment cannot be read, a wrapper has no `claude` yet, a wrapper of another copy of the CLI runs, or a `CLAUDE_CONFIG_DIR` is relative, starts with `~`, does not exist or cannot be resolved (it is never read as "some other folder").
+5. After the name is typed, it lists the content again and refuses if it changed meanwhile.
+6. It looks at the processes again, right before the Keychain.
+7. On macOS it deletes the Keychain item with `security delete-generic-password -s <service> -a <user>`, no output kept, never with `-w` or `-g`, and waits at most 60 seconds for it. An item that is not there is not an error: `security` answers 44, the low byte of the OSStatus `errSecItemNotFound` (-25300), as checked on a Mac. The effect of a false "not found" is an orphan item left in the Keychain, never a deletion of more than this account's item. If `security` does not answer in time, it is killed, the command stops, the folder stays and the answer says the item may still be there. With `CLAUDE_SECURESTORAGE_CONFIG_DIR` set the item is shared by every account, so it is left alone and the answer says so. Any other failure stops the command and the folder stays. Elsewhere the login file goes with the folder.
+8. It checks the folder again: the accounts root is still safe, the folder is still a plain folder inside it and it is the same one (same device and inode) as at step 1. If not, it deletes nothing and says that the Keychain step already ran and the folder was kept.
+9. It deletes the folder. The links to `~/.claude` are removed as links; their targets are never followed, and `~/.claude` stays byte for byte as it was. If the deletion fails, the login is already gone from the Keychain: the answer says so and that running `cc-accounts remove <name> --yes` again finishes the job.
 
 ### How `which` finds the account
 
@@ -242,7 +255,7 @@ Reads:
 
 - `~/.claude` (listing and link targets) and `~/.claude.json`.
 - `~/.claude-accounts/*/.claude.json`, only to show the email.
-- The `.divergent-*` entries of each account folder (names only), to list them in `ls --json` and before a removal.
+- The names of the entries of each account folder, and where its shared entries point, to list the account's own content in `ls --json` and before a removal (never what is inside the files).
 - Whether a login exists: a `security find-generic-password` lookup by service name that uses the exit code only (macOS), or the existence of `.credentials.json` elsewhere.
 - `~/.claude*/sessions/<pid>.json`, to find the id and folder of the pane's session (the mod), and `ps -E` and `pgrep -P` (`which`).
 - The mod keeps one value in its own `localStorage`: which accounts show their panes.
@@ -313,7 +326,7 @@ Fill these in after the first login in each account. None of it has been verifie
 - [ ] **`CLAUDE.md` through a link.** The account's `CLAUDE.md`, being a link to `~/.claude/CLAUDE.md`, is loaded as user memory.
 - [ ] **The pane's pid.** The `foreground.pid` Herdr reports for a pane running `cc-accounts run` is the wrapper's or Claude's, and `which` answers correctly for both.
 - [ ] **The form's Enter and Esc.** That Enter reaches the box's `submit` and that Esc reaches the form's key handler while the box holds the keyboard were not seen in the app. The tests prove the handlers, not the real keyboard.
-- [ ] **The Keychain removal.** `security delete-generic-password` deleting the item a real Claude login made (including a possible macOS permission prompt), and its exit code 44 for a missing item, were checked only against a stand-in, never against the real Keychain.
+- [ ] **The Keychain removal.** `security delete-generic-password` deleting the item a real Claude login made (including a possible macOS permission prompt) was checked only against a stand-in, never against the real Keychain. That `security` answers 44 for a missing item was checked on a Mac.
 - [ ] **`--fork-session` with `--resume`.** Present in `claude --help`; its behavior when the source session is still live has not been exercised.
 
 ## Verified in the app
