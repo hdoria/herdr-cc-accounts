@@ -2,8 +2,6 @@
 
 A tab-bar button and a side panel that show which Claude Code account each Herdr pane uses. The button carries the account's round avatar and name; clicking it slides open a 360 px panel with the accounts grouped as in use, signed in and needing a login, the panes that run Claude in each one, and a button to open a new tab or a fork of the session in another account.
 
-<!-- Placeholder: run `cc-accounts demo on`, open the panel and save the screenshot as preview.png in this folder. -->
-
 ![Claude Code accounts](preview.png)
 
 **What you see:**

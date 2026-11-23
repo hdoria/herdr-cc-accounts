@@ -2,8 +2,6 @@
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg) ![Node 22 or newer](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)
 
-<!-- Placeholder: run `cc-accounts demo on`, take the screenshot of the open panel and save it as mods/cc-accounts/preview.png. -->
-
 ![The cc-accounts panel in Herdr](mods/cc-accounts/preview.png)
 
 Claude Code accounts side by side in Herdr.app. Each pane opens already in the account you choose, accounts run at the same time, and a button in the tab bar opens a side panel that shows which account the focused pane uses, which accounts are in use, which panes use each one and which accounts need a login.
