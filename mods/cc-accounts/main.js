@@ -3,8 +3,9 @@
 // props().role "toggle": a tab-bar button that shows or hides the layout's "cc-accounts-panel" node.
 // props().role "panel": the side panel with the accounts, filled while it is shown.
 // props().role "menu" (or none, as mod.open delivers it): the popup listing the accounts.
+// props().role "add": the small popup the menu's "Add account…" opens, holding only the add form.
 // The data comes from the `cc-accounts` CLI that sits in this mod's folder (the PATH is the fallback);
-// the mod never reads credentials or writes files.
+// the mod never reads credentials or writes files itself: `cc-accounts add` creates an account's folder.
 // One copy reads for all: the result and a short lock live in shared state, so the button, the panel, the
 // chip and the popup show the same data and run `cc-accounts ls` once between them.
 
@@ -12,7 +13,7 @@
 /** @import { Account, AccountGroup, AccountStatus, FocusedClaude, PaneItem, Session, View as AccountsView } from "./model.js" */
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import {
   exec,
   terminals,
@@ -35,6 +36,8 @@ import {
 } from "herdr";
 import {
   ACCOUNT_NAME,
+  ADD_POPUP_HEIGHT,
+  ADD_ROW_HEIGHT,
   SESSION_ID,
   accountPanes,
   accountStatus,
@@ -43,10 +46,13 @@ import {
   cliCandidates,
   countPanes,
   demoView,
+  failureText,
   findNode,
   goToCommands,
   groupAccounts,
   initial,
+  loginTab,
+  newAccountProblem,
   paneTooltip,
   parseListing,
   parseWhich,
@@ -68,11 +74,16 @@ const PANEL_NODE = "cc-accounts-panel";
 const LIVE_ROLES = ["chip", "toggle", "panel"];
 const POPUP_WIDTH = 340;
 const TIP = "A running process keeps its account. Switching opens a new process.";
+const DEMO_NOTE = "demo mode";
 
 /** @typedef {Record<string, string>} Theme */
+/** @typedef {{ input: import("gpui-base").InputState, busy: boolean, error: string | null }} AddForm */
 
 /** @param {unknown} e */
 const errorMessage = (e) => (typeof e === "object" && e !== null && "message" in e ? String(e.message) : String(e));
+
+/** @param {string} text */
+const pathMessage = (text) => (/ENOENT|not found|127/i.test(text) ? "cc-accounts is not on PATH" : text);
 
 // Runs the CLI, trying the copy in this mod's folder first. `known` is the one that worked on the last read.
 /**
@@ -98,7 +109,6 @@ async function cliExec(args, known) {
  * @param {Cx} cx
  */
 const stop = (_e, cx) => cx.stop_propagation();
-const mono = () => settings()?.font_family || "Menlo";
 
 // Work started from render: cx.spawn runs its body up to the first await at once, and shared state must not
 // change while a view renders, so the work starts after the render ends.
@@ -174,6 +184,37 @@ function iconButton(t, id, name, tip, onClick) {
     .child(icon(name, 14, t.muted));
 }
 
+// A labelled button: the form's Create and Cancel, and the panel footer's Add account.
+/**
+ * @param {Theme} t
+ * @param {string} id
+ * @param {string} label
+ * @param {"primary" | "plain"} kind
+ * @param {(event: unknown, cx: Cx) => void} onClick
+ */
+function textButton(t, id, label, kind, onClick) {
+  const primary = kind === "primary";
+  return h_flex()
+    .id(id)
+    .h(28)
+    .px(12)
+    .flex_none()
+    .items_center()
+    .justify_center()
+    .rounded(6)
+    .border(1)
+    .border_color(primary ? t.foreground : t.border)
+    .bg(primary ? t.foreground : t.raised)
+    .text_color(primary ? t.background : t.foreground)
+    .text_size(sizes().label + 1)
+    .font_medium()
+    .cursor_pointer()
+    .hover((s) => s.bg(primary ? t.muted : t.hover))
+    .on_mouse_down("left", stop)
+    .on_click(onClick)
+    .child(label);
+}
+
 /**
  * @param {Theme} t
  * @param {AccountGroup} section
@@ -190,13 +231,15 @@ function sectionLabel(t, section) {
     .child(`${section.title} · ${section.items.length}`);
 }
 
-// The title row of the panel and the popup: icon, title, a context chip and a close button.
+// The title row of the panel and the popup: icon, title, a context chip, an add button (when onAdd is given) and a
+// close button.
 /**
  * @param {Theme} t
  * @param {string} chip
  * @param {(event: unknown, cx: Cx) => void} onClose
+ * @param {((event: unknown, cx: Cx) => void) | null} [onAdd]
  */
-function header(t, chip, onClose) {
+function header(t, chip, onClose, onAdd = null) {
   const s = sizes();
   return h_flex()
     .h(44)
@@ -220,6 +263,7 @@ function header(t, chip, onClose) {
         .child(chip),
     )
     .child(div().flex_1())
+    .when(onAdd !== null, (row) => row.child(iconButton(t, "add-account-header", "plus", "Add account", onAdd)))
     .child(
       h_flex()
         .id("close")
@@ -299,6 +343,11 @@ export default class ClaudeCodeAccounts extends View {
     this.role = p.role ?? "menu";
     /** @type {Record<string, boolean>} */
     this.open = this.loadOpen();
+    /** @type {AddForm | null} */
+    this.form = null;
+    this.formHandle = cx.focus_handle();
+    // The add popup is the form alone; a block can also start with the form open (props.form is "open").
+    if (this.role === "add" || p.form === "open") this.openForm(cx);
     // herdr-app check runs init for real: no exec or timer may start there.
     if (checking()) return;
     if (LIVE_ROLES.includes(this.role)) cx.timer.every(REFRESH_MS, (cx) => this.timerRead(cx));
@@ -440,7 +489,7 @@ export default class ClaudeCodeAccounts extends View {
       accountsAt = 0;
       demo = false;
       cli = null;
-      error = /ENOENT|not found|127/i.test(errorMessage(e)) ? "cc-accounts is not on PATH" : errorMessage(e);
+      error = pathMessage(errorMessage(e));
     }
     setShared(DATA_KEY, {
       accounts,
@@ -531,10 +580,102 @@ export default class ClaudeCodeAccounts extends View {
     });
   }
 
-  // The same as a new tab; the button's tooltip tells the user to run /login once Claude is open.
+  // A new tab in the account whose first message is /login. Whether Herdr delivers that message when the program
+  // is the `cc-accounts run` wrapper is not verified, so the button's tooltip still tells the user to run /login.
   /** @param {string} name */
   logIn(name) {
-    this.newTab(name);
+    if (!ACCOUNT_NAME.test(name) || this.demo()) return;
+    this.closePopup();
+    run("tab.new", loginTab(this.cliCommand(), name));
+  }
+
+  // ---- The add form: a name, checked as it is typed; Create runs `cc-accounts add` and then opens the login tab ----
+
+  // Opens the form (a second click only moves the keyboard back to it). InputState needs a live host call, so it is
+  // made here and in init, never in render. The input is drawn on the next frame, so focus is asked again a moment later.
+  /** @param {Cx} cx */
+  openForm(cx) {
+    if (this.form) {
+      this.form.input.focus();
+      return;
+    }
+    const input = InputState.new({ placeholder: "account-name", value: "" });
+    /** @type {AddForm} */
+    const form = { input, busy: false, error: null };
+    this.form = form;
+    input.on("change", (_e, cx) => {
+      form.error = null;
+      cx.notify();
+    });
+    input.on("submit", (_e, cx) => this.submit(cx));
+    input.focus();
+    if (!checking()) cx.timer.after(300, () => (this.form === form ? input.focus() : undefined));
+    cx.notify();
+  }
+
+  // Cancel, Esc, and a finished Create. In the add popup the form is the whole window, so it closes with it.
+  /** @param {Cx} cx */
+  closeForm(cx) {
+    this.form = null;
+    if (this.role === "add") this.closePopup();
+    cx.notify();
+  }
+
+  // What is wrong with the name now typed, against the accounts on screen; null while the box is empty.
+  /** @param {AccountsView} v */
+  formProblem(v) {
+    const name = this.form?.input.value().trim() ?? "";
+    return name === "" ? null : newAccountProblem(name, v.accounts);
+  }
+
+  /** @param {Cx} cx */
+  submit(cx) {
+    const form = this.form;
+    if (!form || form.busy) return;
+    const name = form.input.value().trim();
+    const problem = name === "" ? "type a name first" : newAccountProblem(name, this.view().accounts);
+    if (problem || this.demo()) {
+      form.error = problem ?? DEMO_NOTE;
+      cx.notify();
+      return;
+    }
+    form.busy = true;
+    form.error = null;
+    cx.notify();
+    void cx.spawn((cx) => this.create(form, name, cx));
+  }
+
+  // `cc-accounts add`, then the login tab, a fresh read of the list and the end of the form. A failure stays in the
+  // form, short, so the name can be corrected.
+  /**
+   * @param {AddForm} form
+   * @param {string} name
+   * @param {Cx} cx
+   */
+  async create(form, name, cx) {
+    try {
+      const { cli, result } = await cliExec(["add", name], shared(DATA_KEY)?.cli ?? null);
+      if (result.code !== 0) {
+        form.error = failureText(result.stderr || result.stdout, "cc-accounts add failed");
+        return;
+      }
+      run("tab.new", loginTab(cli, name));
+      await this.refresh(cx);
+      if (this.form === form) this.closeForm(cx);
+    } catch (e) {
+      form.error = pathMessage(errorMessage(e));
+    } finally {
+      form.busy = false;
+      cx.notify();
+    }
+  }
+
+  // A read that ignores the age of the last one, so a new account is on the list when the form closes.
+  /** @param {Cx} cx */
+  async refresh(cx) {
+    const data = shared(DATA_KEY);
+    if (data) setShared(DATA_KEY, { ...data, accountsAt: 0, at: 0 });
+    await this.read(cx, REFRESH_MS);
   }
 
   togglePanel() {
@@ -558,6 +699,27 @@ export default class ClaudeCodeAccounts extends View {
       height: popupHeight(sections, v.error),
       props: {
         role: "menu",
+        accounts: v.accounts,
+        current: v.current,
+        session: v.session,
+        counts: v.counts,
+        error: v.error,
+      },
+    });
+  }
+
+  // The popup cannot grow to hold a form, and the panel may not be in the layout, so "Add account…" swaps the list
+  // for a small popup of its own that holds only the form.
+  /** @param {AccountsView} v */
+  openAddPopup(v) {
+    this.closePopup();
+    openOverlay({
+      mod: "cc-accounts",
+      kind: "popup",
+      width: POPUP_WIDTH,
+      height: ADD_POPUP_HEIGHT,
+      props: {
+        role: "add",
         accounts: v.accounts,
         current: v.current,
         session: v.session,
@@ -869,6 +1031,89 @@ export default class ClaudeCodeAccounts extends View {
     return out;
   }
 
+  // The form: a label, the name box (its border turns `blocked` on a bad name), the message below it in `blocked`
+  // and Cancel and Create. Enter submits through the input, Esc cancels through the container's key handler.
+  /**
+   * @param {Theme} t
+   * @param {AccountsView} v
+   * @returns {Element}
+   */
+  addForm(t, v) {
+    const form = this.form;
+    const s = sizes();
+    const problem = this.formProblem(v);
+    const shown = form.error ?? problem;
+    return v_flex()
+      .id("add-form")
+      .flex_none()
+      .mx(8)
+      .mt(8)
+      .p(10)
+      .gap(8)
+      .rounded(8)
+      .border(1)
+      .border_color(t.border)
+      .bg(t.background)
+      .track_focus(this.formHandle)
+      .on_key_down((e, cx) => {
+        if (e.key !== "escape") return;
+        cx.stop_propagation();
+        this.closeForm(cx);
+      })
+      .child(
+        div()
+          .text_size(s.label - 1)
+          .font_semibold()
+          .text_color(t.muted)
+          .child("NEW ACCOUNT"),
+      )
+      .child(
+        Input.new(form.input)
+          .h(30)
+          .px(10)
+          .rounded(6)
+          .border(1)
+          .border_color(problem ? t.blocked : t.border)
+          .bg(t.raised)
+          .text_size(s.body)
+          .text_color(t.foreground),
+      )
+      .when(Boolean(shown), (el) => el.child(div().text_size(s.label).text_color(t.blocked).child(shown)))
+      .child(
+        h_flex()
+          .gap(8)
+          .justify_end()
+          .child(textButton(t, "add-cancel", "Cancel", "plain", (_e, cx) => this.closeForm(cx)))
+          .child(
+            textButton(t, "add-create", form.busy ? "Creating…" : "Create", "primary", (_e, cx) => this.submit(cx)),
+          ),
+      );
+  }
+
+  // The last item of the popup's list.
+  /**
+   * @param {Theme} t
+   * @param {AccountsView} v
+   * @returns {Element}
+   */
+  addRow(t, v) {
+    return h_flex()
+      .id("add-account-row")
+      .min_h(ADD_ROW_HEIGHT - 8)
+      .mx(8)
+      .mt(4)
+      .px(10)
+      .gap(10)
+      .items_center()
+      .rounded(8)
+      .cursor_pointer()
+      .hover((x) => x.bg(t.hover))
+      .on_mouse_down("left", stop)
+      .on_click(() => this.openAddPopup(v))
+      .child(icon("plus", 14, t.muted))
+      .child(div().text_size(sizes().body).text_color(t.foreground).child("Add account…"));
+  }
+
   /**
    * @param {Theme} t
    * @param {AccountsView} v
@@ -905,7 +1150,14 @@ export default class ClaudeCodeAccounts extends View {
       .min_h(0)
       .overflow_hidden()
       .text_color(t.foreground)
-      .child(header(t, chipText(v), () => this.closePopup()))
+      .child(
+        header(
+          t,
+          chipText(v),
+          () => this.closePopup(),
+          () => this.openAddPopup(v),
+        ),
+      )
       .child(
         v_flex()
           .id("accounts-menu-list")
@@ -913,7 +1165,7 @@ export default class ClaudeCodeAccounts extends View {
           .min_h(0)
           .pb(8)
           .overflow_y_scroll()
-          .children(this.sections(t, v, false)),
+          .children([...this.sections(t, v, false), this.addRow(t, v)]),
       )
       .when(Boolean(v.error), (el) => el.child(this.errorLine(t, v)));
   }
@@ -934,7 +1186,14 @@ export default class ClaudeCodeAccounts extends View {
       .bg(t.chrome)
       .text_color(t.foreground)
       .text_size(s.body)
-      .child(header(t, chipText(v), () => run("layout.hide", { id: PANEL_NODE })))
+      .child(
+        header(
+          t,
+          chipText(v),
+          () => run("layout.hide", { id: PANEL_NODE }),
+          (_e, cx) => this.openForm(cx),
+        ),
+      )
       .child(
         div()
           .flex_none()
@@ -951,7 +1210,7 @@ export default class ClaudeCodeAccounts extends View {
           .min_h(0)
           .pb(8)
           .overflow_y_scroll()
-          .children(this.sections(t, v, true)),
+          .children([...(this.form ? [this.addForm(t, v)] : []), ...this.sections(t, v, true)]),
       )
       .when(Boolean(v.error), (el) => el.child(this.errorLine(t, v)))
       .child(
@@ -969,18 +1228,23 @@ export default class ClaudeCodeAccounts extends View {
               .child(icon("info", 14, t.muted))
               .child(div().flex_1().min_w(0).text_size(s.label).text_color(t.muted).child(TIP)),
           )
-          .child(
-            div()
-              .px(8)
-              .py(4)
-              .rounded(6)
-              .bg(t.raised)
-              .font_family(mono())
-              .text_size(s.label)
-              .text_color(t.foreground)
-              .child("cc-accounts add <name>"),
-          ),
+          .child(textButton(t, "add-account", "Add account", "plain", (_e, cx) => this.openForm(cx))),
       );
+  }
+
+  // The small popup "Add account…" opens: the title row and the form.
+  /** @returns {Element} */
+  addPopup() {
+    const v = this.view();
+    const t = theme();
+    return v_flex()
+      .id("accounts-add")
+      .size_full()
+      .min_h(0)
+      .overflow_hidden()
+      .text_color(t.foreground)
+      .child(header(t, "new account", () => this.closePopup()))
+      .when(Boolean(this.form), (el) => el.child(this.addForm(t, v)));
   }
 
   /**
@@ -988,6 +1252,7 @@ export default class ClaudeCodeAccounts extends View {
    * @returns {Element}
    */
   render(cx) {
+    if (this.role === "add") return this.addPopup();
     if (this.role === "chip") return this.chip(cx);
     if (this.role === "toggle") return this.toggle(cx);
     if (this.role === "panel") return this.panel(cx);

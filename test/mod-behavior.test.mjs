@@ -17,28 +17,68 @@ const LOCK = "cc-accounts.lock";
 function load(world) {
   const calls = { run: [], exec: [], openOverlay: [], closeOverlay: [] };
   const texts = [];
+  // Every click and key handler the render hands out, with the id of the element it sits on.
+  const handlers = [];
   const builder = () => {
+    let id = null;
     const self = new Proxy(
       (...args) => {
         for (const a of args) if (typeof a === "string") texts.push(a);
         return self;
       },
       {
-        get: (_, key) =>
-          key === "when"
-            ? (cond, fn) => {
-                if (cond) fn(self);
-                return self;
-              }
-            : self,
+        get: (_, key) => {
+          if (key === "when") {
+            return (cond, fn) => {
+              if (cond) fn(self);
+              return self;
+            };
+          }
+          if (key === "id") {
+            return (value) => {
+              id = value;
+              texts.push(value);
+              return self;
+            };
+          }
+          if (key === "on_click" || key === "on_key_down") {
+            return (fn) => {
+              handlers.push({ id, event: key, fn });
+              return self;
+            };
+          }
+          return self;
+        },
       },
     );
     return self;
   };
+  // A text box: the value, its handlers by event and the number of times it was asked for focus.
+  const inputs = [];
+  const makeInput = (options) => {
+    const on = {};
+    const input = {
+      options,
+      text: "",
+      focused: 0,
+      value: () => input.text,
+      focus: () => input.focused++,
+      on: (event, fn) => ((on[event] ??= []).push(fn), true),
+      type(text, cx) {
+        input.text = text;
+        for (const fn of on.change ?? []) fn({}, cx);
+      },
+      submit(cx) {
+        for (const fn of on.submit ?? []) fn({}, cx);
+      },
+    };
+    inputs.push(input);
+    return input;
+  };
   world.store ??= new Map();
   const stubs = {
     "gpui-kit": { View: class {}, div: builder, svg: builder },
-    "gpui-base": { v_flex: builder, h_flex: builder },
+    "gpui-base": { v_flex: builder, h_flex: builder, InputState: { new: makeInput }, Input: { new: builder } },
     "./model.js": MODEL,
     herdr: {
       exec: async (...args) => {
@@ -75,7 +115,7 @@ function load(world) {
   const Mod = new Function("stubs", "localStorage", source)(stubs, storage);
   const mod = Object.create(Mod.prototype);
   Object.assign(mod, { role: world.role ?? "menu", open: {} });
-  return { mod, calls, texts };
+  return { mod, calls, texts, handlers, inputs };
 }
 
 const listing = (extra = {}) => JSON.stringify({ demo: false, accounts, ...extra });
@@ -142,7 +182,9 @@ const cxFor = (extra = {}) => {
       pending.push(p);
       return p;
     },
-    timer: { every: (ms, fn) => timers.push([ms, fn]) },
+    timer: { every: (ms, fn) => timers.push([ms, fn]), after: (ms, fn) => timers.push([ms, fn]) },
+    focus_handle: () => ({ focus() {}, is_focused: () => false }),
+    stop_propagation() {},
     ...extra,
   };
   return { cx, pending, timers };
@@ -188,11 +230,13 @@ describe("mod behavior", () => {
     assert.deepEqual(calls.closeOverlay, []);
   });
 
-  test("Log in opens a tab in the account like New tab does", () => {
+  test("Log in opens a tab whose first message is /login, and only for a valid account name", () => {
     const { mod, calls } = load(world);
     mod.logIn("fresh");
     mod.logIn("Bad Name");
-    assert.deepEqual(calls.run, [["tab.new", { argv: [CLI, "run", "fresh"] }]]);
+    assert.deepEqual(calls.run, [
+      ["tab.new", { name: "fresh login", argv: [CLI, "run", "fresh"], task: "/login", focus: true }],
+    ]);
   });
 
   test("a pane whose foreground process is claude is focused, with its pid", () => {
@@ -405,7 +449,7 @@ describe("mod behavior", () => {
       "Open a tab and run /login",
       "New tab",
       "Continue here in a fork",
-      "cc-accounts add <name>",
+      "Add account",
     ])
       assert.ok(texts.includes(word), `${word} missing from ${JSON.stringify(texts)}`);
     // The numbers: 5 accounts, 2 in use, 3 panes, 2 without a login.
@@ -640,5 +684,237 @@ describe("mod behavior", () => {
     const data = world.store.get(DATA);
     assert.equal(data.error, "cc-accounts is not on PATH");
     assert.equal(data.cli, null);
+  });
+  describe("add account", () => {
+    const handler = (handlers, id, event = "on_click") => {
+      const found = handlers.find((h) => h.id === id && h.event === event);
+      assert.ok(found, `no ${event} handler on ${id}`);
+      return found.fn;
+    };
+    // exec for a world where `add` answers with `add(args)` and a later `ls` lists the new account too.
+    const adding = (add) => async (_command, args) => {
+      if (args[0] === "add") return add(args);
+      const list = [...accounts, { name: "newacct", dir: "/x/newacct", email: null, signedIn: false }];
+      return { code: 0, stdout: args[0] === "ls" ? listing({ accounts: list }) : "", stderr: "" };
+    };
+    const panelWorld = (extra = {}) =>
+      filled({ role: "panel", props: { role: "panel", overlay: 7 }, layout: layoutWith(false), ...extra });
+    const withForm = () => panelWorld({ props: { role: "panel", form: "open" } });
+    // Draws the mod now and returns only what this render wrote.
+    const draw = (m) => {
+      const from = m.texts.length;
+      m.mod.render(cxFor().cx);
+      return m.texts.slice(from);
+    };
+
+    test("the header +, the footer button and the popup item all open the form, with the keyboard on the name box", () => {
+      world = panelWorld();
+      const m = load(world);
+      const { cx } = cxFor();
+      m.mod.init({}, cx);
+      assert.equal(m.inputs.length, 0);
+      const first = draw(m);
+      assert.ok(first.includes("Add account"));
+      assert.ok(!first.includes("NEW ACCOUNT"));
+      handler(m.handlers, "add-account-header")({}, cx);
+      assert.equal(m.inputs.length, 1);
+      assert.ok(m.inputs[0].focused > 0, "the name box was not focused");
+      assert.ok(draw(m).includes("NEW ACCOUNT"));
+      // A second click does not make a second box; it takes the keyboard back to the first.
+      const focused = m.inputs[0].focused;
+      handler(m.handlers, "add-account")({}, cx);
+      assert.equal(m.inputs.length, 1);
+      assert.ok(m.inputs[0].focused > focused);
+    });
+
+    test("the popup lists Add account… last and it swaps the list for the small form popup", () => {
+      world = filled({ props: { role: "menu", overlay: 7 }, role: "menu" });
+      const m = load(world);
+      const { cx } = cxFor();
+      const drawn = draw(m);
+      assert.ok(drawn.includes("Add account…"));
+      assert.ok(drawn.includes("add-account-header"), "the popup header has no + button");
+      handler(m.handlers, "add-account-row")({}, cx);
+      assert.deepEqual(m.calls.closeOverlay, [7]);
+      assert.equal(m.calls.openOverlay[0].props.role, "add");
+      assert.equal(m.calls.openOverlay[0].height, MODEL.ADD_POPUP_HEIGHT);
+      handler(m.handlers, "add-account-header")({}, cx);
+      assert.equal(m.calls.openOverlay.length, 2);
+    });
+
+    test("the name is checked as it is typed, and the message sits under the box", () => {
+      world = withForm();
+      const m = load(world);
+      const { cx } = cxFor();
+      m.mod.init({}, cx);
+      const [input] = m.inputs;
+      const cases = [
+        ["", null],
+        ["Bad Name", 'invalid name "Bad Name"'],
+        ["-lead", 'invalid name "-lead"'],
+        ["default", '"default" is reserved'],
+        ["spare", '"spare" already exists'],
+        ["new-one", null],
+      ];
+      for (const [typed, message] of cases) {
+        input.type(typed, cx);
+        const shown = draw(m).filter((t) => /invalid name|reserved|already exists/.test(t));
+        if (message === null) assert.deepEqual(shown, [], typed);
+        else assert.ok(shown.length === 1 && shown[0].startsWith(message), `${typed}: ${JSON.stringify(shown)}`);
+      }
+    });
+
+    test("the default account's display name is reserved too", () => {
+      const renamed = accounts.map((a) => (a.name === "default" ? { ...a, name: "personal" } : a));
+      world = withForm();
+      world.store.set(DATA, { ...world.store.get(DATA), accounts: renamed });
+      const m = load(world);
+      const { cx } = cxFor();
+      m.mod.init({}, cx);
+      m.inputs[0].type("personal", cx);
+      assert.ok(draw(m).some((t) => t.startsWith('"personal" is reserved')));
+    });
+
+    test("Create runs `add`, shows Creating…, opens the login tab, refreshes the list and closes the form", async () => {
+      world = withForm();
+      world.exec = adding(() => ({ code: 0, stdout: "account newacct created\n", stderr: "" }));
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      m.mod.init({}, cx);
+      m.inputs[0].type("  newacct ", cx);
+      draw(m);
+      handler(m.handlers, "add-create")({}, cx);
+      assert.ok(draw(m).includes("Creating…"));
+      await Promise.all(pending);
+      assert.deepEqual(m.calls.exec[0], [CLI, ["add", "newacct"]]);
+      assert.deepEqual(m.calls.run, [
+        ["tab.new", { name: "newacct login", argv: [CLI, "run", "newacct"], task: "/login", focus: true }],
+      ]);
+      assert.ok(
+        world.store.get(DATA).accounts.some((a) => a.name === "newacct"),
+        "the list was not read again",
+      );
+      assert.equal(m.mod.form, null);
+      assert.ok(!draw(m).includes("NEW ACCOUNT"));
+    });
+
+    test("Enter in the name box creates, like the button", async () => {
+      world = withForm();
+      world.exec = adding(() => ({ code: 0, stdout: "", stderr: "" }));
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      m.mod.init({}, cx);
+      m.inputs[0].type("newacct", cx);
+      m.inputs[0].submit(cx);
+      await Promise.all(pending);
+      assert.equal(m.calls.run.length, 1);
+      assert.deepEqual(m.calls.exec[0], [CLI, ["add", "newacct"]]);
+    });
+
+    test("a failed `add` stays in the form as a short message and opens no tab", async () => {
+      world = withForm();
+      const stderr = `cc-accounts: ${"disk is full ".repeat(30)}\nsecond line\n`;
+      world.exec = adding(() => ({ code: 1, stdout: "", stderr }));
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      m.mod.init({}, cx);
+      m.inputs[0].type("newacct", cx);
+      m.inputs[0].submit(cx);
+      await Promise.all(pending);
+      assert.deepEqual(m.calls.run, []);
+      assert.ok(m.mod.form, "the form closed");
+      assert.equal(m.mod.form.busy, false);
+      const shown = draw(m).filter((t) => t.startsWith("disk is full"));
+      assert.equal(shown.length, 1);
+      assert.ok(shown[0].length <= 120 && !shown[0].includes("second line") && !shown[0].includes("cc-accounts:"));
+      // Typing again clears the message.
+      m.inputs[0].type("newacct2", cx);
+      assert.equal(draw(m).filter((t) => t.startsWith("disk is full")).length, 0);
+    });
+
+    test("an `add` that cannot start says cc-accounts is not on PATH", async () => {
+      world = withForm();
+      world.exec = async () => {
+        throw new Error("spawn ENOENT");
+      };
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      m.mod.init({}, cx);
+      m.inputs[0].type("newacct", cx);
+      m.inputs[0].submit(cx);
+      await Promise.all(pending);
+      assert.deepEqual(m.calls.run, []);
+      assert.ok(draw(m).includes("cc-accounts is not on PATH"));
+    });
+
+    test("an empty or taken name runs nothing", () => {
+      world = withForm();
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      m.mod.init({}, cx);
+      m.inputs[0].submit(cx);
+      assert.ok(draw(m).includes("type a name first"));
+      m.inputs[0].type("spare", cx);
+      m.inputs[0].submit(cx);
+      assert.equal(pending.length, 0);
+      assert.deepEqual(m.calls.exec, []);
+      assert.deepEqual(m.calls.run, []);
+    });
+
+    test("Esc and Cancel close the form without running anything; other keys do not", () => {
+      world = withForm();
+      const m = load(world);
+      const { cx } = cxFor();
+      m.mod.init({}, cx);
+      draw(m);
+      handler(m.handlers, "add-form", "on_key_down")({ key: "a", keystroke: "a" }, cx);
+      assert.ok(m.mod.form);
+      handler(m.handlers, "add-form", "on_key_down")({ key: "escape", keystroke: "escape" }, cx);
+      assert.equal(m.mod.form, null);
+      m.mod.openForm(cx);
+      draw(m);
+      handler(m.handlers, "add-cancel")({}, cx);
+      assert.equal(m.mod.form, null);
+      assert.deepEqual(m.calls.exec, []);
+      assert.deepEqual(m.calls.run, []);
+    });
+
+    test("in the add popup the form is the window: it opens with it, Esc and a finished Create close it", async () => {
+      world = filled({ props: { role: "add", overlay: 7, accounts }, role: "add" });
+      world.exec = adding(() => ({ code: 0, stdout: "", stderr: "" }));
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      m.mod.init({}, cx);
+      assert.equal(m.inputs.length, 1);
+      assert.ok(draw(m).includes("NEW ACCOUNT"));
+      handler(m.handlers, "add-form", "on_key_down")({ key: "escape", keystroke: "escape" }, cx);
+      assert.deepEqual(m.calls.closeOverlay, [7]);
+
+      m.mod.openForm(cx);
+      m.inputs.at(-1).type("newacct", cx);
+      m.inputs.at(-1).submit(cx);
+      await Promise.all(pending);
+      assert.equal(m.calls.run.length, 1);
+      assert.deepEqual(m.calls.closeOverlay, [7, 7]);
+    });
+
+    test("in demo mode the button shows, and Create runs nothing and says demo mode", () => {
+      world = withForm();
+      world.store.set(DATA, {
+        ...world.store.get(DATA),
+        demo: true,
+        accounts: [{ name: "personal", dir: null, email: "personal@example.com", signedIn: true }],
+      });
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      m.mod.init({}, cx);
+      assert.ok(draw(m).includes("Add account"));
+      m.inputs[0].type("newacct", cx);
+      m.inputs[0].submit(cx);
+      assert.ok(draw(m).includes("demo mode"));
+      assert.equal(pending.length, 0);
+      assert.deepEqual(m.calls.exec, []);
+      assert.deepEqual(m.calls.run, []);
+    });
   });
 });

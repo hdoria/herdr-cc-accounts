@@ -63,7 +63,7 @@ cc-accounts add work
 cc-accounts add personal
 ```
 
-In each new account, open a tab with `cc-accounts run <name>` and use `/login`.
+In each new account, open a tab with `cc-accounts run <name>` and use `/login`. The panel can do both steps for you: see [Adding an account from the panel](#adding-an-account-from-the-panel).
 
 ### The toggle button and the panel
 
@@ -108,12 +108,23 @@ The panel is laid out like the skillshare panel:
 - A header with the accounts icon, `Claude accounts`, a chip (`this pane · <account>`, or `no Claude here`) and a close button that runs `layout.hide`.
 - A strip of numbers: `Accounts`, `In use`, `Panes`, and `Needs login` only when at least one account has no login, in the `blocked` color.
 - The accounts in sections with a colored label and a count: `IN USE · n`, `SIGNED IN · n`, `NEEDS LOGIN · n`. An empty section is not drawn. The focused pane's account leads its section.
-- One compact row per account: the avatar, the name over the email in small text, the number of panes (`2 panes`), a check on the account of the focused pane and icon buttons with a tooltip. `+` opens a new tab in the account. The fork icon, **Continue here in a fork**, appears when the focused pane has a live session, the account is another one and it has a login. An account with no login only has the `log-in` icon, which opens a tab and says to run `/login` once Claude is open.
-- A footer with the reminder that a running process keeps its account, and `cc-accounts add <name>`.
+- One compact row per account: the avatar, the name over the email in small text, the number of panes (`2 panes`), a check on the account of the focused pane and icon buttons with a tooltip. `+` opens a new tab in the account. The fork icon, **Continue here in a fork**, appears when the focused pane has a live session, the account is another one and it has a login. An account with no login only has the `log-in` icon, which opens a tab named `<name> login` running `cc-accounts run <name>` with `/login` as its first message (the icon's tooltip still says to run `/login` once Claude is open, in case that message does not arrive: see [Unverified assumptions](#unverified-assumptions)).
+- A `+` button in the header, with the tooltip `Add account`.
+- A footer with the reminder that a running process keeps its account, and an `Add account` button.
 
 **Which panes use an account.** The pane count of an account is a button with a chevron. It opens the list of that account's panes under its row: `space › tab`, the folder of the pane (its title when it has none), a dot with the agent's status (`working`, `blocked`, `done`, `idle`) and a mark on the focused one. A click takes you there: `space.select`, `tab.select`, then `pane.focus`. The list is built from what the mod already has (the pid to account answer of `cc-accounts which`, `terminals()`, `panes()` and `spaces()`), with no extra command. Only panes of this computer are listed: a Claude on another machine cannot be resolved here, so it is left out. The open or closed state is kept per account in the panel's `localStorage`; the account of the focused pane starts open until you choose. In the popup nothing expands: the count's tooltip lists the panes.
 
 A hidden panel runs no command, and it reads again as soon as it is shown. The panel follows the focused pane.
+
+### Adding an account from the panel
+
+The header's `+` and the footer's `Add account` open a form at the top of the list: a name box with the keyboard already in it, **Cancel** and **Create**. Enter creates and Esc cancels.
+
+- **The name is checked as you type**, with the rule `cc-accounts add` applies (`^[a-z0-9][a-z0-9-]*$`, not `default`, not the name the default account is shown under, and, only in the form, not an account that already exists). The message appears under the box in the `blocked` color. The rule is one function, `nameProblem` in `mods/cc-accounts/model.js`, which the CLI imports too, so the two cannot drift and the folder stays self-contained.
+- **Create** runs `cc-accounts add <name>` through the same CLI the mod already resolved, and the button reads `Creating…` while it runs. If it fails, the first line of its error stays in the form, so the name can be corrected. If it works, the mod opens a focused tab named `<name> login` that runs `cc-accounts run <name>` with `task: "/login"`, reads the list again so the account is on it, and closes the form.
+- **In demo mode** the button is there, but Create runs nothing and says `demo mode`.
+- **In the popup** (`ctrl-shift-a`) the list ends with an `Add account…` item, and the header has the same `+`. A popup cannot change size after it opens and the panel may not be in your layout, so both open a second, small popup that holds only the form. It works the same, and closes when the account is created or on Esc.
+- A block can start with the form already open with `props.form` set to `"open"`. That is how the tests check the open form with `herdr-app check`.
 
 **One reader.** The button, the panel, the chip and the popup are separate copies of the mod. They share the result of the last read through Herdr's shared state, and a short lock makes only one of them run `cc-accounts ls` and `cc-accounts which`. A read starts when the focused pane or the set of Claude panes changes (the render runs on those), and a 30 second timer re-reads. There is no faster timer.
 
@@ -150,7 +161,7 @@ How it is known:
 
 The chip follows the focused pane when it runs a local Claude; on any other pane it reads "no Claude". Clicking it opens the popup.
 
-The popup has the same rows and sections as the panel, without the numbers strip. Each row has the `+` button, which opens `cc-accounts run <name>` in a new tab, and, when the focused pane has a live session in another account, the fork button, **Continue here in a fork**. That one opens a pane to the right with `terminal.open`, passing the command as an `argv` list and the session's folder as `folder`, so no shell and no quoting are involved: `cc-accounts run <name> --resume <id> --fork-session`. The fork matters: without it two live Claude processes would write to the same conversation.
+The popup has the same rows and sections as the panel, without the numbers strip, and ends with `Add account…`. Each row has the `+` button, which opens `cc-accounts run <name>` in a new tab, and, when the focused pane has a live session in another account, the fork button, **Continue here in a fork**. That one opens a pane to the right with `terminal.open`, passing the command as an `argv` list and the session's folder as `folder`, so no shell and no quoting are involved: `cc-accounts run <name> --resume <id> --fork-session`. The fork matters: without it two live Claude processes would write to the same conversation.
 
 ## Commands
 
@@ -215,7 +226,7 @@ Reads:
 
 Writes:
 
-- `~/.claude-accounts/<name>/`: the links, `.claude.json` (atomic merge, mode 0600) and any `.divergent-*`.
+- `~/.claude-accounts/<name>/`: the links, `.claude.json` (atomic merge, mode 0600) and any `.divergent-*`. The mod itself writes no file: the panel's Create runs `cc-accounts add`, which does.
 - `~/.claude-accounts/.demo`, an empty file, only when you run `cc-accounts demo on`.
 - At install time: `~/.local/bin/cc-accounts`, `~/.config/herdr-app/mods/cc-accounts/` and `~/.config/herdr-app/keys.json` (with a backup). With `--layout` or `--remove`, also the shown layout file (with a backup).
 
@@ -235,7 +246,7 @@ herdr-app check mods/cc-accounts
 
 `pnpm test` runs the suite without the coverage threshold. `build` has nothing to compile, since Herdr loads the mod's JavaScript as it is: it checks that the folder the gallery copies is self-contained.
 
-Every process the tests start (the CLI, `install.sh`, `herdr-app check`) gets a temporary `HOME` (`herdr-app check` writes under `HOME/Library/Application Support`, and passes with an empty one). The tests only read the real process table. The mod tests that call `herdr-app` need it on `PATH` and are skipped without it. `test/model.test.mjs` tests the pure part of the mod (`mods/cc-accounts/model.js`: Claude detection, sections, the panes of each account, the click's commands). `test/mod-behavior.test.mjs` runs the mod's real source against recorded stand-ins for the Herdr modules (shared state included, so it can show that two copies run one read), so it needs nothing installed. `herdr-app check` cannot pass props to a mod, so the tests check copies of the mod whose `props()` returns fixed values, with accounts in the three states, which exercises the `chip`, `toggle`, `panel` and `menu` roles. The tests of `place-layout` run on small layout files in `test/fixtures/` and on `install.sh` with throwaway folders. Every CLI test puts a stand-in `security` first on `PATH`, so the real Keychain is never asked.
+Every process the tests start (the CLI, `install.sh`, `herdr-app check`) gets a temporary `HOME` (`herdr-app check` writes under `HOME/Library/Application Support`, and passes with an empty one). The tests only read the real process table. The mod tests that call `herdr-app` need it on `PATH` and are skipped without it. `test/model.test.mjs` tests the pure part of the mod (`mods/cc-accounts/model.js`: Claude detection, sections, the panes of each account, the click's commands, the name rule, the login tab). `test/mod-behavior.test.mjs` runs the mod's real source against recorded stand-ins for the Herdr modules (shared state included, so it can show that two copies run one read), so it needs nothing installed. `herdr-app check` cannot pass props to a mod, so the tests check copies of the mod whose `props()` returns fixed values, with accounts in the three states, which exercises the `chip`, `toggle`, `panel` (also with the add form open) and `menu` roles, and the `add` popup. The tests of `place-layout` run on small layout files in `test/fixtures/` and on `install.sh` with throwaway folders. Every CLI test puts a stand-in `security` first on `PATH`, so the real Keychain is never asked.
 
 ## Uninstall
 
@@ -262,6 +273,8 @@ Fill these in after the first login in each account. None of it has been verifie
 - [ ] **The `settings.json` link survives.** A write by Claude (`/config`) keeps the link or replaces it with a regular file. `sync` repairs it either way, but it is worth knowing how often it happens.
 - [ ] **`CLAUDE.md` through a link.** The account's `CLAUDE.md`, being a link to `~/.claude/CLAUDE.md`, is loaded as user memory.
 - [ ] **The pane's pid.** The `foreground.pid` Herdr reports for a pane running `cc-accounts run` is the wrapper's or Claude's, and `which` answers correctly for both.
+- [ ] **`task: "/login"` through the wrapper.** The login tab is `tab.new` with `argv: [cc-accounts, "run", <name>]` and `task: "/login"`. Herdr's guide says `task` is the agent's first message, and Herdr detects an agent by its process, which here is the `cc-accounts run` wrapper in front of `claude`. Whether the message arrives in that case was **not verified in the app**. What was seen, in a separate herdr-core with its own socket and a throwaway `HOME`, with a stand-in `claude`: `hc run claude "/login"` hands the text to `claude` as an argument, not as a typed message; `hc run cc-accounts run <name> "/login"` also reaches `claude` as `/login`, because the wrapper passes extra arguments on; and a template launch, which is the path that types a first message, did not deliver it for the stand-in or for the wrapper alike, since Herdr only types it into a program that reports its status, which a stand-in does not. So the core's behavior with a real Claude Code, and the app's own `tab.new`, are open. If the message does not arrive, type `/login` in the new tab: the `log-in` button's tooltip says so.
+- [ ] **The form's keyboard.** That the name box has the keyboard when the form opens (focus is asked at once and again 300 ms later, because the box is drawn on the next frame), that Enter reaches the box's `submit` and that Esc reaches the form's key handler while the box holds the keyboard were not seen in the app. `herdr-app check` proves the form renders and the tests prove the handlers, not the real keyboard.
 - [ ] **`--fork-session` with `--resume`.** Present in `claude --help`; its behavior when the source session is still live has not been exercised.
 
 ## License

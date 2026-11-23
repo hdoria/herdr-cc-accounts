@@ -11,7 +11,18 @@ declare module "gpui-kit" {
     sleep(ms: number): Promise<void>;
     spawn<T>(task: (cx: Cx) => Promise<T>): Promise<T>;
     stop_propagation(): void;
-    timer: { every(ms: number, tick: (cx: Cx) => void): void };
+    focus_handle(): FocusHandle;
+    timer: { every(ms: number, tick: (cx: Cx) => void): void; after(ms: number, tick: (cx: Cx) => void): void };
+  }
+
+  export interface FocusHandle {
+    focus(): void;
+    is_focused(): boolean;
+  }
+
+  export interface KeyEvent {
+    key: string;
+    keystroke: string;
   }
 
   type Child = Element | string;
@@ -40,6 +51,7 @@ declare module "gpui-kit" {
     | "justify_center"
     | "justify_end"
     | "mb"
+    | "mt"
     | "min_h"
     | "min_w"
     | "ml"
@@ -47,6 +59,7 @@ declare module "gpui-kit" {
     | "mx"
     | "overflow_hidden"
     | "overflow_y_scroll"
+    | "p"
     | "pb"
     | "pl"
     | "pr"
@@ -70,6 +83,8 @@ declare module "gpui-kit" {
     active(style: (element: Element) => Element): Element;
     on_click(handler: (event: unknown, cx: Cx) => void): Element;
     on_mouse_down(button: "left" | "right", handler: (event: unknown, cx: Cx) => void): Element;
+    on_key_down(handler: (event: KeyEvent, cx: Cx) => void): Element;
+    track_focus(handle: FocusHandle): Element;
   };
 
   export function div(): Element;
@@ -82,9 +97,17 @@ declare module "gpui-kit" {
 }
 
 declare module "gpui-base" {
-  import type { Element } from "gpui-kit";
+  import type { Cx, Element } from "gpui-kit";
   export function v_flex(): Element;
   export function h_flex(): Element;
+
+  export interface InputState {
+    value(): string;
+    focus(): void;
+    on(event: "change" | "submit", handler: (event: unknown, cx: Cx) => void): boolean;
+  }
+  export const InputState: { new: (options?: { placeholder?: string; value?: string }) => InputState };
+  export const Input: { new: (state: InputState) => Element };
 }
 
 declare module "herdr" {

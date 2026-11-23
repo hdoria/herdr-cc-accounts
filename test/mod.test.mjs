@@ -115,6 +115,23 @@ describe("mod", { skip: !hasHerdr && "herdr-app is not installed" }, () => {
     }
   });
 
+  test("the panel renders with the add form open, with the footer button and with an error line", () => {
+    for (const extra of [
+      { form: "open" },
+      { form: "open", error: "something failed" },
+      { form: "open", current: null },
+    ]) {
+      const r = check(fixed("panel", extra));
+      assert.equal(r.code, 0, r.out);
+    }
+    assert.equal(check(fixed("panel", { form: "open", accounts: [], current: null, counts: {} })).code, 0);
+  });
+
+  test("the add popup renders the form alone", () => {
+    const r = check(fixed("add"));
+    assert.equal(r.code, 0, r.out);
+  });
+
   test("the files the installer copies are all there", () => {
     for (const file of [
       "main.js",
