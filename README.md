@@ -109,6 +109,7 @@ The panel is laid out like this:
 - A strip of numbers: `Accounts`, `In use`, `Panes`, and `Needs login` only when at least one account has no login, in the `blocked` color.
 - The accounts in sections with a colored label and a count: `IN USE · n`, `SIGNED IN · n`, `NEEDS LOGIN · n`. An empty section is not drawn. The focused pane's account leads its section.
 - One compact row per account: the avatar, the name over the email in small text, the number of panes (`2 panes`), a check on the account of the focused pane and icon buttons with a tooltip. `+` opens a new tab in the account. The fork icon, **Continue here in a fork**, appears when the focused pane has a live session, the account is another one and it has a login. An account with no login only has the `log-in` icon, which opens a tab named `<name> login` running `cc-accounts run <name>` with `/login` as its first message (the icon's tooltip still says to run `/login` once Claude is open, in case that message does not arrive: see [Unverified assumptions](#unverified-assumptions)).
+- A trash icon, tooltip `Remove account`, on the accounts that have a folder of their own and no pane: see [Removing an account](#removing-an-account-from-the-panel).
 - A `+` button in the header, with the tooltip `Add account`.
 - A footer with the reminder that a running process keeps its account, and an `Add account` button.
 
@@ -125,6 +126,15 @@ The header's `+` and the footer's `Add account` open a form at the top of the li
 - **In demo mode** the button is there, but Create runs nothing and says `demo mode`.
 - **In the popup** (`ctrl-shift-a`) the list ends with an `Add account…` item, and the header has the same `+`. A popup cannot change size after it opens and the panel may not be in your layout, so both open a second, small popup that holds only the form. It works the same, and closes when the account is created or on Esc.
 - A block can start with the form already open with `props.form` set to `"open"`. That is how the tests check the open form with `herdr-app check`.
+
+### Removing an account from the panel
+
+The trash icon is in the panel only, never in the popup. It is missing on the default account and on an account that a pane uses. A click opens a question inside the row: `Remove <name>? Its login is deleted from the Keychain.`, with **Cancel**, **Remove** (in the `blocked` color) and, when `sync` kept files aside in that folder, the list of those `.divergent-*` files, which go with the folder.
+
+- **Remove** reads the list again first. If the files that would be deleted are not the ones you were shown, it stops, shows the new list and waits for you to confirm again. Otherwise it runs `cc-accounts remove <name> --yes` and reads the list again. The button reads `Removing…` meanwhile.
+- **An error** (the account is in use by a Claude outside Herdr, the Keychain refused) stays in the row, short, and nothing is closed.
+- **In demo mode** the question opens, but Remove runs nothing and says `demo mode`.
+- A block can start with the question open with `props.remove` set to the account's name. That is how the tests check it with `herdr-app check`.
 
 **One reader.** The button, the panel, the chip and the popup are separate copies of the mod. They share the result of the last read through Herdr's shared state, and a short lock makes only one of them run `cc-accounts ls` and `cc-accounts which`. A read starts when the focused pane or the set of Claude panes changes (the render runs on those), and a 30 second timer re-reads. There is no faster timer.
 
@@ -167,8 +177,9 @@ The popup has the same rows and sections as the panel, without the numbers strip
 
 | Command                              | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cc-accounts ls [--json]`            | Lists the accounts with the logged-in email, whether there is a login and the folder. `--json` prints `{ "demo": false, "accounts": [{ name, dir, email, signedIn }] }`; `demo` is `true` only in demo mode.                                                                                                                                                                                                                                                  |
+| `cc-accounts ls [--json]`            | Lists the accounts with the logged-in email, whether there is a login and the folder. `--json` prints `{ "demo": false, "accounts": [{ name, dir, email, signedIn, divergent }] }`, where `divergent` lists the `.divergent-*` files `sync` kept aside in the account's folder; `demo` is `true` only in demo mode.                                                                                                                                           |
 | `cc-accounts add <name>`             | Creates `~/.claude-accounts/<name>` and applies the sharing table. A name matches `^[a-z0-9][a-z0-9-]*$` and cannot be `default` or the configured default name.                                                                                                                                                                                                                                                                                              |
+| `cc-accounts remove <name> [--yes]`  | Deletes an account: its Keychain item first, then its folder. See [What `remove` does](#what-remove-does).                                                                                                                                                                                                                                                                                                                                                    |
 | `cc-accounts sync [<name>]`          | Reapplies links and state. With no name, every account. The second run prints `nothing to change`. It also warns when the shared `settings.json` sets `apiKeyHelper`, `env.ANTHROPIC_API_KEY` or `env.ANTHROPIC_AUTH_TOKEN`, since those apply to every account (names only, never values).                                                                                                                                                                   |
 | `cc-accounts run <name> [args...]`   | Syncs, then opens `claude` in the account. Another pane already open in the same account may be writing its `.claude.json` at that moment, and the two can compete for it (the merge is re-checked once, see below). For the default account it removes `CLAUDE_CONFIG_DIR` from the environment. It relays signals and exits with Claude's exit code. A sync problem, such as an unreadable `~/.claude.json`, is a warning on stderr and Claude still opens. |
 | `cc-accounts which <pid> [<pid>...]` | Prints `<pid> <account>`, one line per pid and in the order given. The account is only ever a known account name or `unknown`. A pid that is not running prints `unknown`, after all lines are printed the exit code is 1.                                                                                                                                                                                                                                    |
@@ -196,6 +207,17 @@ Claude can replace a link with a regular file when it writes (for example `setti
 
 Entries of `~/.claude` that are in no list are not linked. `sync` reports them as "unclassified" so you can decide where they go in the table.
 
+### What `remove` does
+
+`cc-accounts remove <name> [--yes]` is the one way to delete an account that leaves nothing behind. In this order:
+
+1. It refuses the default account (and the name it is shown under), an invalid name and an account that does not exist. A link in place of an account folder is not an account.
+2. It refuses when the folder holds `.divergent-*` files (content `sync` moved aside, which you may want to keep), and lists them. With `--yes` it goes ahead and names them in its answer.
+3. Without `--yes` it asks for a terminal and for the account's name typed in. With no terminal it refuses, so a script has to say `--yes`.
+4. It refuses when a live process of yours has `CLAUDE_CONFIG_DIR` pointing at the folder. It reads that as `which` does, over `pgrep -x claude` and the children of every `cc-accounts run` wrapper. When it cannot tell (`pgrep` fails, an environment cannot be read, a wrapper has no `claude` yet, a wrapper of another copy of the CLI runs), it refuses and says why.
+5. On macOS it deletes the Keychain item with `security delete-generic-password -s <service> -a <user>`, no output kept, never with `-w` or `-g`. The service is the one `ls` looks for. An item that is not there is not an error. With `CLAUDE_SECURESTORAGE_CONFIG_DIR` set the item is shared by every account, so it is left alone and the answer says so. Any other failure stops the command and the folder stays. Elsewhere the login file goes with the folder.
+6. It deletes the folder, only when its real path is a plain folder directly inside the real `~/.claude-accounts`. The links to `~/.claude` are removed as links; their targets are never followed, and `~/.claude` stays byte for byte as it was.
+
 ### How `which` finds the account
 
 `which` never prints text that came from `ps`. It reads the process's `CLAUDE_CONFIG_DIR` (separating the environment from the arguments by comparing `ps` with and without `-E`), resolves it with `realpath` and matches it against the known account folders. If the process is a `cc-accounts run <name>` wrapper (Node has no `exec`, so the wrapper sits in front of `claude`), it is recognized by its command line resolving to this very script, and the answer is read from the environment of its `claude` child (`pgrep -P`); the name in its arguments is never used. If the environment cannot be read, the child is missing or several `CLAUDE_CONFIG_DIR=` appear in it, the answer is `unknown`, never `default`.
@@ -220,6 +242,7 @@ Reads:
 
 - `~/.claude` (listing and link targets) and `~/.claude.json`.
 - `~/.claude-accounts/*/.claude.json`, only to show the email.
+- The `.divergent-*` entries of each account folder (names only), to list them in `ls --json` and before a removal.
 - Whether a login exists: a `security find-generic-password` lookup by service name that uses the exit code only (macOS), or the existence of `.credentials.json` elsewhere.
 - `~/.claude*/sessions/<pid>.json`, to find the id and folder of the pane's session (the mod), and `ps -E` and `pgrep -P` (`which`).
 - The mod keeps one value in its own `localStorage`: which accounts show their panes.
@@ -227,10 +250,11 @@ Reads:
 Writes:
 
 - `~/.claude-accounts/<name>/`: the links, `.claude.json` (atomic merge, mode 0600) and any `.divergent-*`. The mod itself writes no file: the panel's Create runs `cc-accounts add`, which does.
+- `cc-accounts remove` deletes `~/.claude-accounts/<name>/` and, on macOS, that account's Keychain item with `security delete-generic-password -s <service> -a <user>`. It deletes no other item.
 - `~/.claude-accounts/.demo`, an empty file, only when you run `cc-accounts demo on`.
 - At install time: `~/.local/bin/cc-accounts`, `~/.config/herdr-app/mods/cc-accounts/` and `~/.config/herdr-app/keys.json` (with a backup). With `--layout` or `--remove`, also the shown layout file (with a backup).
 
-It never writes to `~/.claude` or `~/.claude.json`. It does not read or write credentials. The Keychain is only asked whether an item exists, never for its value.
+It never writes to `~/.claude` or `~/.claude.json`. It does not read or write credentials. The Keychain is asked whether an item exists and, for `remove`, to delete the item of the account being removed; it is never asked for a value.
 
 ## Tests
 
@@ -246,7 +270,7 @@ herdr-app check mods/cc-accounts
 
 `pnpm test` runs the suite without the coverage threshold. `build` has nothing to compile, since Herdr loads the mod's JavaScript as it is: it checks that the folder the gallery copies is self-contained.
 
-Every process the tests start (the CLI, `install.sh`, `herdr-app check`) gets a temporary `HOME` (`herdr-app check` writes under `HOME/Library/Application Support`, and passes with an empty one). The tests only read the real process table. The mod tests that call `herdr-app` need it on `PATH` and are skipped without it. `test/model.test.mjs` tests the pure part of the mod (`mods/cc-accounts/model.js`: Claude detection, sections, the panes of each account, the click's commands, the name rule, the login tab). `test/mod-behavior.test.mjs` runs the mod's real source against recorded stand-ins for the Herdr modules (shared state included, so it can show that two copies run one read), so it needs nothing installed. `herdr-app check` cannot pass props to a mod, so the tests check copies of the mod whose `props()` returns fixed values, with accounts in the three states, which exercises the `chip`, `toggle`, `panel` (also with the add form open) and `menu` roles, and the `add` popup. The tests of `place-layout` run on small layout files in `test/fixtures/` and on `install.sh` with throwaway folders. Every CLI test puts a stand-in `security` first on `PATH`, so the real Keychain is never asked.
+Every process the tests start (the CLI, `install.sh`, `herdr-app check`) gets a temporary `HOME` (`herdr-app check` writes under `HOME/Library/Application Support`, and passes with an empty one). The tests only read the real process table. The mod tests that call `herdr-app` need it on `PATH` and are skipped without it. `test/model.test.mjs` tests the pure part of the mod (`mods/cc-accounts/model.js`: Claude detection, sections, the panes of each account, the click's commands, the name rule, the login tab). `test/mod-behavior.test.mjs` runs the mod's real source against recorded stand-ins for the Herdr modules (shared state included, so it can show that two copies run one read), so it needs nothing installed. `herdr-app check` cannot pass props to a mod, so the tests check copies of the mod whose `props()` returns fixed values, with accounts in the three states, which exercises the `chip`, `toggle`, `panel` (also with the add form open) and `menu` roles, and the `add` popup. The tests of `place-layout` run on small layout files in `test/fixtures/` and on `install.sh` with throwaway folders. Every CLI test puts a stand-in `security` and a stand-in `pgrep` first on `PATH`, so the real Keychain is never asked and `remove` never reads the environment of your real Claude processes.
 
 ## Contributing
 
@@ -255,6 +279,15 @@ Every process the tests start (the CLI, `install.sh`, `herdr-app check`) gets a 
 `.claude/settings.json` suggests two optional plugins (`pstack` and `mattpocock-skills`) to anyone who works on the repository with Claude Code. They are a convenience, not a requirement: nothing in the build, the tests or the CI uses them, and the repository works the same without Claude Code.
 
 ## Uninstall
+
+First remove each extra account, which deletes its folder and its Keychain item (close its Claude first):
+
+```sh
+cc-accounts ls
+cc-accounts remove <name>
+```
+
+Then:
 
 ```sh
 rm -rf ~/.claude-accounts
@@ -266,7 +299,7 @@ Then:
 
 1. Remove `"ctrl-shift-a": "mod.open:cc-accounts"` from `~/.config/herdr-app/keys.json` (or restore the oldest `keys.json.bak-<epoch in ms>-<hex>`).
 2. Run `./install.sh --remove` (or delete the `cc-accounts-toggle` and `cc-accounts-panel` nodes) and remove the chip block from your layout, if you added it.
-3. In Keychain Access, delete the `Claude Code-credentials-<hash>` items of the extra accounts. The item without a suffix belongs to the default account: do not delete it.
+3. If you deleted an account folder by hand instead of using `remove`, an orphan `Claude Code-credentials-<hash>` item stays in the Keychain. Delete it in Keychain Access. The item without a suffix belongs to the default account: do not delete it.
 
 `~/.claude` is never changed, so the default account stays as it was.
 
@@ -279,9 +312,14 @@ Fill these in after the first login in each account. None of it has been verifie
 - [ ] **The `settings.json` link survives.** A write by Claude (`/config`) keeps the link or replaces it with a regular file. `sync` repairs it either way, but it is worth knowing how often it happens.
 - [ ] **`CLAUDE.md` through a link.** The account's `CLAUDE.md`, being a link to `~/.claude/CLAUDE.md`, is loaded as user memory.
 - [ ] **The pane's pid.** The `foreground.pid` Herdr reports for a pane running `cc-accounts run` is the wrapper's or Claude's, and `which` answers correctly for both.
-- [ ] **`task: "/login"` through the wrapper.** The login tab is `tab.new` with `argv: [cc-accounts, "run", <name>]` and `task: "/login"`. Herdr's guide says `task` is the agent's first message, and Herdr detects an agent by its process, which here is the `cc-accounts run` wrapper in front of `claude`. Whether the message arrives in that case was **not verified in the app**. What was seen, in a separate herdr-core with its own socket and a throwaway `HOME`, with a stand-in `claude`: `hc run claude "/login"` hands the text to `claude` as an argument, not as a typed message; `hc run cc-accounts run <name> "/login"` also reaches `claude` as `/login`, because the wrapper passes extra arguments on; and a template launch, which is the path that types a first message, did not deliver it for the stand-in or for the wrapper alike, since Herdr only types it into a program that reports its status, which a stand-in does not. So the core's behavior with a real Claude Code, and the app's own `tab.new`, are open. If the message does not arrive, type `/login` in the new tab: the `log-in` button's tooltip says so.
-- [ ] **The form's keyboard.** That the name box has the keyboard when the form opens (focus is asked at once and again 300 ms later, because the box is drawn on the next frame), that Enter reaches the box's `submit` and that Esc reaches the form's key handler while the box holds the keyboard were not seen in the app. `herdr-app check` proves the form renders and the tests prove the handlers, not the real keyboard.
+- [ ] **The form's Enter and Esc.** That Enter reaches the box's `submit` and that Esc reaches the form's key handler while the box holds the keyboard were not seen in the app. The tests prove the handlers, not the real keyboard.
+- [ ] **The Keychain removal.** `security delete-generic-password` deleting the item a real Claude login made (including a possible macOS permission prompt), and its exit code 44 for a missing item, were checked only against a stand-in, never against the real Keychain.
 - [ ] **`--fork-session` with `--resume`.** Present in `claude --help`; its behavior when the source session is still live has not been exercised.
+
+## Verified in the app
+
+- **`task: "/login"` through the wrapper.** VERIFIED IN THE APP, 2026-11-23, by Hugo: the Create button's login tab (`tab.new` with `argv: [cc-accounts, "run", <name>]` and `task: "/login"`) delivers `/login` to Claude. The `log-in` button's tooltip still tells you to run `/login`, in case the message does not arrive.
+- **The form's focus and the name error.** VERIFIED IN THE APP, 2026-11-23, by Hugo: the name box has the keyboard when the form opens, and an invalid name shows its message.
 
 ## License
 
