@@ -1,0 +1,6 @@
+node_modules/
+coverage/
+.DS_Store
+# Written by Herdr when it loads the mod: the editor settings and the API declarations of its runtime.
+mods/*/jsconfig.json
+mods/*/gpui-kit.d.ts
