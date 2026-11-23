@@ -13,7 +13,7 @@ pre-commit:
     eslint:
       priority: 1
       glob: "*.{ts,mts,cts,js,mjs,cjs}"
-      run: "{pmx} eslint {staged_files} --max-warnings 0 --fix"
+      run: "{pmx} eslint {staged_files} --max-warnings 0 --no-warn-ignored --fix"
       stage_fixed: true
     prettier:
       priority: 2
