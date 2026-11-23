@@ -7,6 +7,7 @@
  * @property {string} [dir]
  * @property {string | null} [email]
  * @property {boolean} [signedIn]
+ * @property {string[]} [divergent]
  */
 
 /**
@@ -155,6 +156,21 @@ export function failureText(text, fallback) {
   const bare = line?.replace(/^cc-accounts: /, "");
   return bare ? clip(bare, 120) : fallback;
 }
+
+// Only an account with a folder of its own and no pane can be removed. The CLI checks the processes again.
+/**
+ * @param {Account} account
+ * @param {number} panes
+ */
+export const removable = (account, panes) => typeof account.dir === "string" && panes === 0;
+
+// The files `sync` kept aside in the account's folder, as `ls --json` lists them.
+/** @param {Account | undefined} account */
+export const divergentOf = (account) =>
+  Array.isArray(account?.divergent) ? account.divergent.filter((name) => typeof name === "string") : [];
+
+/** @param {string} name */
+export const removeArgs = (name) => ["remove", name, "--yes"];
 
 /**
  * @param {number} n

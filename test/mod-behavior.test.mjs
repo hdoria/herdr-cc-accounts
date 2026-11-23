@@ -977,4 +977,215 @@ describe("mod behavior", () => {
       assert.deepEqual(m.calls.run, []);
     });
   });
+
+  describe("remove account", () => {
+    const handler = (handlers, id, event = "on_click") => {
+      const found = handlers.find((h) => h.id === id && h.event === event);
+      assert.ok(found, `no ${event} handler on ${id}`);
+      return found.fn;
+    };
+    const ids = (m) => m.handlers.map((h) => h.id);
+    const draw = (m) => {
+      const from = m.texts.length;
+      m.mod.render(cxFor().cx);
+      return m.texts.slice(from);
+    };
+    const panelWorld = (extra = {}) =>
+      filled({ role: "panel", props: { role: "panel", overlay: 7 }, layout: layoutWith(false), ...extra });
+    const KEPT = "settings.json.divergent-1700000000-4242-0a1b2c";
+    // `ls` lists `list`, `which` answers for the three panes and `remove` answers with `answer(args)`; a
+    // successful remove takes the account off the list that later reads see.
+    const serving = (answer, list = accounts) => {
+      let current = list;
+      const exec = async (_command, args) => {
+        if (args[0] === "remove") {
+          const r = answer(args);
+          if (r.code === 0) current = current.filter((a) => a.name !== args[1]);
+          return r;
+        }
+        if (args[0] === "which") return { code: 0, stdout: "41 work\n42 work\n43 busy\n", stderr: "" };
+        return { code: 0, stdout: listing({ accounts: current }), stderr: "" };
+      };
+      return exec;
+    };
+    const ok = () => ({ code: 0, stdout: "removed account spare\n", stderr: "" });
+    const withKept = accounts.map((a) => (a.name === "spare" ? { ...a, divergent: [KEPT] } : a));
+
+    test("the trash icon is only on accounts that have a folder and no pane, and only in the panel", () => {
+      const m = load(panelWorld());
+      draw(m);
+      assert.deepEqual(
+        ids(m).filter((id) => id.startsWith("remove-")),
+        ["remove-spare", "remove-fresh"],
+      );
+      assert.ok(m.texts.includes("Remove account"));
+      world = filled({ role: "menu", props: { role: "menu", overlay: 7 } });
+      const popup = load(world);
+      draw(popup);
+      assert.deepEqual(
+        ids(popup).filter((id) => id.startsWith("remove-")),
+        [],
+      );
+    });
+
+    test("the model only offers removal to an account with its own folder and no pane", () => {
+      assert.equal(MODEL.removable({ name: "a", dir: "/x/a" }, 0), true);
+      assert.equal(MODEL.removable({ name: "a", dir: "/x/a" }, 1), false);
+      assert.equal(MODEL.removable({ name: "default", dir: null }, 0), false);
+      assert.deepEqual(MODEL.removeArgs("a"), ["remove", "a", "--yes"]);
+      assert.deepEqual(MODEL.divergentOf({ name: "a", divergent: ["x", 3, "y"] }), ["x", "y"]);
+      assert.deepEqual(MODEL.divergentOf({ name: "a" }), []);
+      assert.deepEqual(MODEL.divergentOf(undefined), []);
+    });
+
+    test("a click asks inside the row, and Cancel closes the question without running anything", () => {
+      const m = load(panelWorld());
+      const { cx } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-spare")({}, cx);
+      const drawn = draw(m);
+      assert.ok(drawn.includes("Remove spare? Its login is deleted from the Keychain."));
+      assert.ok(drawn.includes("Remove") && drawn.includes("Cancel"));
+      assert.equal(drawn.filter((t) => t.startsWith("Remove ") && t.endsWith("Keychain.")).length, 1);
+      handler(m.handlers, "remove-cancel")({}, cx);
+      assert.ok(!draw(m).some((t) => t.endsWith("deleted from the Keychain.")));
+      assert.deepEqual(m.calls.exec, []);
+      assert.deepEqual(m.calls.run, []);
+    });
+
+    test("the files that go with the folder are listed in the question", () => {
+      world = panelWorld();
+      world.store.set(DATA, { ...world.store.get(DATA), accounts: withKept });
+      const m = load(world);
+      const { cx } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-spare")({}, cx);
+      const drawn = draw(m);
+      assert.ok(drawn.includes("These files are deleted with the folder:"));
+      assert.ok(drawn.includes(KEPT));
+    });
+
+    test("Remove reads the list, runs `remove <name> --yes`, reads again and closes the question", async () => {
+      world = panelWorld();
+      world.exec = serving(ok);
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-spare")({}, cx);
+      draw(m);
+      handler(m.handlers, "remove-confirm")({}, cx);
+      assert.ok(draw(m).includes("Removing…"));
+      await Promise.all(pending);
+      const cli = m.calls.exec.filter(([command]) => command === CLI);
+      assert.deepEqual(
+        cli.map(([, args]) => args[0]),
+        ["ls", "which", "remove", "ls", "which"],
+      );
+      assert.deepEqual(cli[2], [CLI, ["remove", "spare", "--yes"]]);
+      assert.ok(!world.store.get(DATA).accounts.some((a) => a.name === "spare"));
+      assert.equal(m.mod.removal, null);
+      assert.deepEqual(m.calls.run, []);
+    });
+
+    test("an error of the CLI stays in the row, short, and the question stays open", async () => {
+      world = panelWorld();
+      const stderr = `cc-accounts: ${"disk is full ".repeat(30)}\nsecond line\n`;
+      world.exec = serving(() => ({ code: 1, stdout: "", stderr }));
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-spare")({}, cx);
+      draw(m);
+      handler(m.handlers, "remove-confirm")({}, cx);
+      await Promise.all(pending);
+      assert.ok(m.mod.removal, "the question closed");
+      assert.equal(m.mod.removal.busy, false);
+      const shown = draw(m).filter((t) => t.startsWith("disk is full"));
+      assert.equal(shown.length, 1);
+      assert.ok(shown[0].length <= 120 && !shown[0].includes("second line"));
+      assert.ok(draw(m).includes("Remove"), "the button is back");
+    });
+
+    test("a CLI that cannot start says cc-accounts is not on PATH", async () => {
+      world = panelWorld();
+      world.exec = async () => {
+        throw new Error("spawn ENOENT");
+      };
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-spare")({}, cx);
+      draw(m);
+      handler(m.handlers, "remove-confirm")({}, cx);
+      await Promise.all(pending);
+      assert.ok(draw(m).includes("cc-accounts is not on PATH"));
+    });
+
+    test("files that changed since the question was shown stop the removal and are shown again", async () => {
+      world = panelWorld();
+      world.exec = serving(ok, withKept);
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-spare")({}, cx);
+      draw(m);
+      handler(m.handlers, "remove-confirm")({}, cx);
+      await Promise.all(pending);
+      assert.ok(!m.calls.exec.some(([, args]) => args[0] === "remove"));
+      const drawn = draw(m);
+      assert.ok(drawn.includes(KEPT));
+      assert.ok(drawn.includes("The files changed. Check the list and confirm again."));
+      handler(m.handlers, "remove-confirm")({}, cx);
+      await Promise.all(pending);
+      assert.ok(m.calls.exec.some(([, args]) => args[0] === "remove"));
+    });
+
+    test("an account that is gone by the next read is not removed", async () => {
+      world = panelWorld();
+      world.exec = serving(
+        ok,
+        accounts.filter((a) => a.name !== "spare"),
+      );
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-spare")({}, cx);
+      draw(m);
+      handler(m.handlers, "remove-confirm")({}, cx);
+      await Promise.all(pending);
+      assert.ok(!m.calls.exec.some(([, args]) => args[0] === "remove"));
+      assert.equal(m.mod.removal.error, "this account is gone or in use now");
+    });
+
+    test("in demo mode the question opens, Remove runs nothing and says demo mode", () => {
+      world = panelWorld();
+      world.store.set(DATA, {
+        ...world.store.get(DATA),
+        demo: true,
+        accounts: [
+          { name: "personal", dir: null, email: "personal@example.com", signedIn: true },
+          { name: "client", dir: "~/.claude-accounts/client", email: "client@example.com", signedIn: false },
+        ],
+      });
+      const m = load(world);
+      const { cx, pending } = cxFor();
+      draw(m);
+      handler(m.handlers, "remove-client")({}, cx);
+      draw(m);
+      handler(m.handlers, "remove-confirm")({}, cx);
+      assert.ok(draw(m).includes("demo mode"));
+      assert.equal(pending.length, 0);
+      assert.deepEqual(m.calls.exec, []);
+      assert.deepEqual(m.calls.run, []);
+    });
+
+    test("a block can start with the question open, with props.remove", () => {
+      world = panelWorld({ props: { role: "panel", remove: "spare", accounts: withKept } });
+      const m = load(world);
+      m.mod.init({}, cxFor().cx);
+      const drawn = draw(m);
+      assert.ok(drawn.includes("Remove spare? Its login is deleted from the Keychain."));
+      assert.ok(drawn.includes(KEPT));
+    });
+  });
 });

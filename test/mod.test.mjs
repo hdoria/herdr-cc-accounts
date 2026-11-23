@@ -127,6 +127,21 @@ describe("mod", { skip: !hasHerdr && "herdr-app is not installed" }, () => {
     assert.equal(check(fixed("panel", { form: "open", accounts: [], current: null, counts: {} })).code, 0);
   });
 
+  test("the panel renders with the removal question open, with and without files to list, and in an error state", () => {
+    const kept = ACCOUNTS.map((a) =>
+      a.name === "spare" ? { ...a, divergent: ["settings.json.divergent-1700000000-4242-0a1b2c"] } : a,
+    );
+    for (const extra of [
+      { remove: "spare" },
+      { remove: "spare", accounts: kept },
+      { remove: "work", error: "something failed" },
+      { remove: "nobody" },
+    ]) {
+      const r = check(fixed("panel", extra));
+      assert.equal(r.code, 0, r.out);
+    }
+  });
+
   test("the add popup renders the form alone", () => {
     const r = check(fixed("add"));
     assert.equal(r.code, 0, r.out);
@@ -140,7 +155,7 @@ describe("mod", { skip: !hasHerdr && "herdr-app is not installed" }, () => {
       "cc-accounts",
       "mod.json",
       "RECIPE.md",
-      ...["users", "plus", "fork", "log-in", "info", "close", "check", "chevron-right", "chevron-down"].map(
+      ...["users", "plus", "fork", "log-in", "info", "close", "check", "chevron-right", "chevron-down", "trash"].map(
         (n) => `icons/${n}.svg`,
       ),
     ]) {

@@ -5,7 +5,8 @@
 // props().role "menu" (or none, as mod.open delivers it): the popup listing the accounts.
 // props().role "add": the small popup the menu's "Add account…" opens, holding only the add form.
 // The data comes from the `cc-accounts` CLI that sits in this mod's folder (the PATH is the fallback);
-// the mod never reads credentials or writes files itself: `cc-accounts add` creates an account's folder.
+// the mod never reads credentials or writes files itself: `cc-accounts add` creates an account's folder and
+// `cc-accounts remove` deletes one, with its Keychain item.
 // One copy reads for all: the result and a short lock live in shared state, so the button, the panel, the
 // chip and the popup show the same data and run `cc-accounts ls` once between them.
 
@@ -46,6 +47,7 @@ import {
   cliCandidates,
   countPanes,
   demoView,
+  divergentOf,
   failureText,
   findNode,
   goToCommands,
@@ -60,6 +62,8 @@ import {
   popupHeight,
   readDue,
   readKey,
+  removable,
+  removeArgs,
   stats,
   localAddress,
   ROW_HEIGHT,
@@ -78,6 +82,7 @@ const DEMO_NOTE = "demo mode";
 
 /** @typedef {Record<string, string>} Theme */
 /** @typedef {{ input: import("gpui-base").InputState, busy: boolean, error: string | null }} AddForm */
+/** @typedef {{ name: string, divergent: string[], busy: boolean, error: string | null }} Removal */
 
 /** @param {unknown} e */
 const errorMessage = (e) => (typeof e === "object" && e !== null && "message" in e ? String(e.message) : String(e));
@@ -184,16 +189,17 @@ function iconButton(t, id, name, tip, onClick) {
     .child(icon(name, 14, t.muted));
 }
 
-// A labelled button: the form's Create and Cancel, and the panel footer's Add account.
+// A labelled button: the form's Create and Cancel, the panel footer's Add account and a removal's Remove.
 /**
  * @param {Theme} t
  * @param {string} id
  * @param {string} label
- * @param {"primary" | "plain"} kind
+ * @param {"primary" | "plain" | "danger"} kind
  * @param {(event: unknown, cx: Cx) => void} onClick
  */
 function textButton(t, id, label, kind, onClick) {
   const primary = kind === "primary";
+  const danger = kind === "danger";
   return h_flex()
     .id(id)
     .h(28)
@@ -203,13 +209,13 @@ function textButton(t, id, label, kind, onClick) {
     .justify_center()
     .rounded(6)
     .border(1)
-    .border_color(primary ? t.foreground : t.border)
-    .bg(primary ? t.foreground : t.raised)
-    .text_color(primary ? t.background : t.foreground)
+    .border_color(primary ? t.foreground : danger ? t.blocked : t.border)
+    .bg(primary ? t.foreground : danger ? t.blocked : t.raised)
+    .text_color(primary || danger ? t.background : t.foreground)
     .text_size(sizes().label + 1)
     .font_medium()
     .cursor_pointer()
-    .hover((s) => s.bg(primary ? t.muted : t.hover))
+    .hover((s) => s.bg(primary ? t.muted : danger ? t.ansi1 : t.hover))
     .on_mouse_down("left", stop)
     .on_click(onClick)
     .child(label);
@@ -345,9 +351,17 @@ export default class ClaudeCodeAccounts extends View {
     this.open = this.loadOpen();
     /** @type {AddForm | null} */
     this.form = null;
+    /** @type {Removal | null} */
+    this.removal = null;
     this.formHandle = cx.focus_handle();
     // The add popup is the form alone; a block can also start with the form open (props.form is "open").
     if (this.role === "add" || p.form === "open") this.openForm(cx);
+    // A block can also start with the removal of one account asked for (props.remove is its name).
+    if (typeof p.remove === "string")
+      this.askRemove(
+        p.remove,
+        /** @type {Account[] | undefined} */ (p.accounts)?.find((a) => a.name === p.remove),
+      );
     // herdr-app check runs init for real: no exec or timer may start there.
     if (checking()) return;
     if (LIVE_ROLES.includes(this.role)) cx.timer.every(REFRESH_MS, (cx) => this.timerRead(cx));
@@ -674,6 +688,78 @@ export default class ClaudeCodeAccounts extends View {
     await this.read(cx, REFRESH_MS);
   }
 
+  // ---- Removing an account: the trash icon asks inside the row, Remove runs `cc-accounts remove <name> --yes` ----
+
+  // The files that would go with the folder are the ones on screen now; Remove checks them again before it runs.
+  /**
+   * @param {string} name
+   * @param {Account | undefined} account
+   */
+  askRemove(name, account) {
+    this.removal = { name, divergent: divergentOf(account), busy: false, error: null };
+  }
+
+  /** @param {Cx} cx */
+  cancelRemove(cx) {
+    this.removal = null;
+    cx.notify();
+  }
+
+  /** @param {Cx} cx */
+  submitRemove(cx) {
+    const removal = this.removal;
+    if (!removal || removal.busy) return;
+    if (this.demo()) {
+      removal.error = DEMO_NOTE;
+      cx.notify();
+      return;
+    }
+    removal.busy = true;
+    removal.error = null;
+    cx.notify();
+    void cx.spawn((cx) => this.remove(removal, cx));
+  }
+
+  // Reads the list again first: if the files that would be deleted are not the ones the person was shown, the
+  // list is updated and the person confirms again. Then the CLI removes the Keychain item and the folder.
+  /**
+   * @param {Removal} removal
+   * @param {Cx} cx
+   */
+  async remove(removal, cx) {
+    try {
+      await this.refresh(cx);
+      const v = this.view();
+      if (v.error) {
+        removal.error = v.error;
+        return;
+      }
+      const now = v.accounts.find((a) => a.name === removal.name);
+      const files = divergentOf(now);
+      if (!now || !removable(now, v.counts[now.name] ?? 0)) {
+        removal.error = "this account is gone or in use now";
+        return;
+      }
+      if (files.join("\n") !== removal.divergent.join("\n")) {
+        removal.divergent = files;
+        removal.error = "The files changed. Check the list and confirm again.";
+        return;
+      }
+      const { result } = await cliExec(removeArgs(removal.name), shared(DATA_KEY)?.cli ?? null);
+      if (result.code !== 0) {
+        removal.error = failureText(result.stderr || result.stdout, "cc-accounts remove failed");
+        return;
+      }
+      await this.refresh(cx);
+      if (this.removal === removal) this.removal = null;
+    } catch (e) {
+      removal.error = pathMessage(errorMessage(e));
+    } finally {
+      removal.busy = false;
+      cx.notify();
+    }
+  }
+
   togglePanel() {
     run("layout.toggle", { id: PANEL_NODE });
   }
@@ -910,12 +996,14 @@ export default class ClaudeCodeAccounts extends View {
         h_flex()
           .flex_none()
           .gap(2)
-          .children(this.actions(t, a, st, here, v)),
+          .children(this.actions(t, a, st, here, v, expandable)),
       );
+    const removal = expandable && this.removal?.name === a.name ? this.removal : null;
     return v_flex()
       .id(`account-${a.name}`)
       .flex_none()
       .child(row)
+      .when(removal !== null, (el) => el.child(this.removeConfirm(t, a, removal)))
       .when(open, (el) =>
         el.child(
           v_flex()
@@ -1012,19 +1100,87 @@ export default class ClaudeCodeAccounts extends View {
    * @param {AccountStatus} st
    * @param {boolean} here
    * @param {AccountsView} v
+   * @param {boolean} expandable
    * @returns {Element[]}
    */
-  actions(t, a, st, here, v) {
-    if (st.needsLogin)
-      return [iconButton(t, `login-${a.name}`, "log-in", "Open a tab and run /login", () => this.logIn(a.name))];
-    const out = [iconButton(t, `tab-${a.name}`, "plus", "New tab", () => this.newTab(a.name))];
-    if (v.session && !here)
+  actions(t, a, st, here, v, expandable) {
+    /** @type {Element[]} */
+    const out = [];
+    if (st.needsLogin) {
+      out.push(iconButton(t, `login-${a.name}`, "log-in", "Open a tab and run /login", () => this.logIn(a.name)));
+    } else {
+      out.push(iconButton(t, `tab-${a.name}`, "plus", "New tab", () => this.newTab(a.name)));
+      if (v.session && !here)
+        out.push(
+          iconButton(t, `continue-${a.name}`, "fork", "Continue here in a fork", () =>
+            this.continueHere(a.name, v.session),
+          ),
+        );
+    }
+    // Removing is for the panel only, never for the default account or one a pane is using.
+    if (expandable && removable(a, st.panes))
       out.push(
-        iconButton(t, `continue-${a.name}`, "fork", "Continue here in a fork", () =>
-          this.continueHere(a.name, v.session),
-        ),
+        iconButton(t, `remove-${a.name}`, "trash", "Remove account", (_e, cx) => {
+          this.askRemove(a.name, a);
+          cx.notify();
+        }),
       );
     return out;
+  }
+
+  // The question under the row of the account: what goes, the files that go with it, an error, Cancel and Remove.
+  /**
+   * @param {Theme} t
+   * @param {Account} a
+   * @param {Removal} removal
+   * @returns {Element}
+   */
+  removeConfirm(t, a, removal) {
+    const s = sizes();
+    return v_flex()
+      .id(`remove-confirm-${a.name}`)
+      .flex_none()
+      .mx(8)
+      .mt(2)
+      .mb(4)
+      .p(10)
+      .gap(8)
+      .rounded(8)
+      .border(1)
+      .border_color(t.blocked)
+      .bg(t.background)
+      .child(
+        div()
+          .text_size(s.body)
+          .text_color(t.foreground)
+          .child(`Remove ${a.name}? Its login is deleted from the Keychain.`),
+      )
+      .when(removal.divergent.length > 0, (el) =>
+        el.child(
+          v_flex()
+            .gap(2)
+            .child(div().text_size(s.label).text_color(t.muted).child("These files are deleted with the folder:"))
+            .children(
+              removal.divergent.map((name) =>
+                div().min_w(0).truncate().text_size(s.label).text_color(t.dim).child(name),
+              ),
+            ),
+        ),
+      )
+      .when(Boolean(removal.error), (el) =>
+        el.child(div().text_size(s.label).text_color(t.blocked).child(removal.error)),
+      )
+      .child(
+        h_flex()
+          .gap(8)
+          .justify_end()
+          .child(textButton(t, "remove-cancel", "Cancel", "plain", (_e, cx) => this.cancelRemove(cx)))
+          .child(
+            textButton(t, "remove-confirm", removal.busy ? "Removing…" : "Remove", "danger", (_e, cx) =>
+              this.submitRemove(cx),
+            ),
+          ),
+      );
   }
 
   // The form: a label, the name box (its border turns `blocked` on a bad name), the message below it in `blocked`
