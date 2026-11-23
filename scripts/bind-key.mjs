@@ -6,6 +6,7 @@
 
 import {
   chmodSync,
+  constants,
   copyFileSync,
   readFileSync,
   realpathSync,
@@ -80,9 +81,11 @@ function main([mode, file, key, action]) {
     return;
   }
 
-  const backup = `${target}.bak-${Math.floor(Date.now() / 1000)}`;
+  // Milliseconds plus random bytes, so two runs in the same instant never pick the same name; COPYFILE_EXCL
+  // makes a name that is taken an error instead of an overwrite.
+  const backup = `${target}.bak-${Date.now()}-${randomBytes(3).toString("hex")}`;
   try {
-    copyFileSync(target, backup);
+    copyFileSync(target, backup, constants.COPYFILE_EXCL);
   } catch (e) {
     fail(`could not back up ${target} to ${backup}: ${reason(e)}`);
   }

@@ -50,7 +50,7 @@ In this order, the script:
 2. Aborts if `~/.config/herdr-app/mods/cc-accounts` exists and is not this mod (a real folder whose `mod.json` has the title "Claude Code accounts"), or if `~/.local/bin/cc-accounts` already exists and is neither a link to the installed CLI nor the link an older layout of this repository made (`bin/cc-accounts`, which is replaced).
 3. Copies `main.js`, `model.js`, `cli.js`, `cc-accounts`, `mod.json` and the `icons/` folder of `mods/cc-accounts/` to `~/.config/herdr-app/mods/cc-accounts`, and removes the `accounts.svg` of an older version. It is a copy, not a link: after changing the repo, run `./install.sh` again. `RECIPE.md` and `preview.png` stay out.
 4. Links `~/.local/bin/cc-accounts` to the CLI in that folder, so the terminal and the mod run the same file.
-5. Backs up `keys.json` as `keys.json.bak-<epoch>` and adds `"ctrl-shift-a": "mod.open:cc-accounts"` under `global`. If `keys.json` is a symbolic link, the file it points to is edited in place and keeps its mode.
+5. Backs up `keys.json` as `keys.json.bak-<epoch in ms>-<6 random hex digits>` (never over an existing backup) and adds `"ctrl-shift-a": "mod.open:cc-accounts"` under `global`. If `keys.json` is a symbolic link, the file it points to is edited in place and keeps its mode.
 
    Herdr's documentation says that once you edit `keys.json`, new default shortcuts that later Herdr versions add stop arriving on their own, because the file is then yours. Check Herdr's release notes after an update, or compare with a fresh `keys.json`.
 
@@ -258,7 +258,7 @@ rm ~/.local/bin/cc-accounts
 
 Then:
 
-1. Remove `"ctrl-shift-a": "mod.open:cc-accounts"` from `~/.config/herdr-app/keys.json` (or restore the oldest `keys.json.bak-<epoch>`).
+1. Remove `"ctrl-shift-a": "mod.open:cc-accounts"` from `~/.config/herdr-app/keys.json` (or restore the oldest `keys.json.bak-<epoch in ms>-<hex>`).
 2. Run `./install.sh --remove` (or delete the `cc-accounts-toggle` and `cc-accounts-panel` nodes) and remove the chip block from your layout, if you added it.
 3. In Keychain Access, delete the `Claude Code-credentials-<hash>` items of the extra accounts. The item without a suffix belongs to the default account: do not delete it.
 

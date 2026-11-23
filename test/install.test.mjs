@@ -206,7 +206,9 @@ describe("install.sh", () => {
     assert.equal(lstatSync(env.keys).isSymbolicLink(), true);
     assert.equal(readKeys(real).global[KEY], ACTION);
     assert.equal(statSync(real).mode & 0o777, 0o640);
-    assert.ok(readdirSync(root).filter((name) => name.startsWith(`real-keys${n}.json.bak-`)).length === 1);
+    const saved = readdirSync(root).filter((name) => name.startsWith(`real-keys${n}.json.bak-`));
+    assert.equal(saved.length, 1);
+    assert.match(saved[0], /\.bak-\d{13}-[0-9a-f]{6}$/);
   });
 
   test("an invalid keys.json aborts without touching anything else", () => {
