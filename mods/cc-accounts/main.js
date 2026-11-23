@@ -428,7 +428,6 @@ export default class ClaudeCodeAccounts extends View {
   sync(cx) {
     const focus = this.focus();
     if (checking() || (this.role === "panel" && this.panelHidden())) return focus;
-    if (this.role === "menu" && shared(DATA_KEY)) return focus;
     if (readDue(shared(DATA_KEY), readKey(focus?.pid, this.claudePids()), Date.now(), REFRESH_MS))
       void later(cx, (cx) => this.read(cx, REFRESH_MS));
     return focus;
@@ -449,7 +448,7 @@ export default class ClaudeCodeAccounts extends View {
     return true;
   }
 
-  // Reads the accounts (unless a recent read has them), the Claude panes' accounts and the focused pane's session.
+  // Reads the accounts, the Claude panes' accounts and the focused pane's session.
   /**
    * @param {Cx} _cx
    * @param {number} maxAge
@@ -461,22 +460,21 @@ export default class ClaudeCodeAccounts extends View {
     const key = readKey(focus?.pid, pids);
     const before = shared(DATA_KEY);
     if (!readDue(before, key, Date.now(), maxAge) || !this.claim()) return;
-    let accounts = before?.accounts ?? [];
-    let accountsAt = before?.accountsAt ?? 0;
-    let demo = before?.demo ?? false;
+    /** @type {Account[]} */
+    let accounts;
+    /** @type {boolean} */
+    let demo;
     let cli = before?.cli ?? null;
     /** @type {Record<string, string>} */
     let byPid = {};
     let session = null;
     let error = null;
     try {
-      if (Date.now() - accountsAt >= REFRESH_MS || before?.error) {
-        const ls = await cliExec(["ls", "--json"], cli);
-        if (ls.result.code !== 0) throw new Error(ls.result.stderr.trim() || "cc-accounts ls failed");
-        ({ accounts, demo } = parseListing(ls.result.stdout));
-        cli = ls.cli;
-        accountsAt = Date.now();
-      }
+      // `ls` runs on every read that is due, so a new account or the demo flag shows at the next read.
+      const ls = await cliExec(["ls", "--json"], cli);
+      if (ls.result.code !== 0) throw new Error(ls.result.stderr.trim() || "cc-accounts ls failed");
+      ({ accounts, demo } = parseListing(ls.result.stdout));
+      cli = ls.cli;
       // In demo mode the panes of this computer are neither asked about nor shown.
       if (!demo) {
         // One call resolves every Claude pane. It exits 1 when a pid vanished meanwhile; its other lines still count.
@@ -486,14 +484,12 @@ export default class ClaudeCodeAccounts extends View {
       }
     } catch (e) {
       accounts = [];
-      accountsAt = 0;
       demo = false;
       cli = null;
       error = pathMessage(errorMessage(e));
     }
     setShared(DATA_KEY, {
       accounts,
-      accountsAt,
       demo,
       cli,
       byPid,
@@ -674,7 +670,7 @@ export default class ClaudeCodeAccounts extends View {
   /** @param {Cx} cx */
   async refresh(cx) {
     const data = shared(DATA_KEY);
-    if (data) setShared(DATA_KEY, { ...data, accountsAt: 0, at: 0 });
+    if (data) setShared(DATA_KEY, { ...data, at: 0 });
     await this.read(cx, REFRESH_MS);
   }
 

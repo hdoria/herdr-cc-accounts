@@ -157,7 +157,6 @@ const filled = (extra = {}) => ({
       DATA,
       {
         accounts,
-        accountsAt: Date.now(),
         cli: CLI,
         byPid: { 41: "work", 42: "work", 43: "busy" },
         session: SESSION,
@@ -347,17 +346,77 @@ describe("mod behavior", () => {
     assert.ok(calls.exec.length > 0);
   });
 
-  test("a change of Claude panes asks `which` again but reuses the fresh accounts", async () => {
+  test("a change of Claude panes lists the accounts again and asks `which` for every pane", async () => {
     world = filled({ role: "toggle", props: null });
-    world.exec = async () => ({ code: 0, stdout: "41 work\n42 work\n43 busy\n44 default\n", stderr: "" });
+    world.exec = async (_c, args) => ({
+      code: 0,
+      stdout: args[0] === "ls" ? listing() : "41 work\n42 work\n43 busy\n44 default\n",
+      stderr: "",
+    });
     world.terminals.push(claude(44, "t4"));
     const { mod, calls } = load(world);
     const { cx, pending } = cxFor();
     mod.sync(cx);
     await Promise.all(pending);
     const asked = calls.exec.filter(([c]) => c === CLI).map(([, a]) => a);
-    assert.deepEqual(asked, [["which", "41", "42", "43", "44"]]);
+    assert.deepEqual(asked, [
+      ["ls", "--json"],
+      ["which", "41", "42", "43", "44"],
+    ]);
     assert.equal(world.store.get(DATA).byPid[44], "default");
+  });
+
+  describe("a popup with no panel or button beside it", () => {
+    const stale = (extra = {}) =>
+      filled({
+        role: "menu",
+        props: { role: "menu", overlay: 3 },
+        layout: null,
+        ...extra,
+      });
+    const age = (w) => w.store.set(DATA, { ...w.store.get(DATA), at: Date.now() - 120000 });
+
+    test("reads again when its data is old, so a new account shows at the next popup", async () => {
+      world = stale();
+      age(world);
+      const fresh = [...accounts, { name: "added", dir: "/x/added", email: "added@example.com", signedIn: true }];
+      world.exec = async (_c, args) => ({
+        code: 0,
+        stdout: args[0] === "ls" ? listing({ accounts: fresh }) : "41 work\n42 work\n43 busy\n",
+        stderr: "",
+      });
+      const { mod } = load(world);
+      const { cx, pending } = cxFor();
+      mod.sync(cx);
+      await Promise.all(pending);
+      assert.ok(mod.view().accounts.some((a) => a.name === "added"));
+    });
+
+    test("shows demo mode at the next popup after `demo on`", async () => {
+      world = stale();
+      age(world);
+      world.exec = async (_c, args) => ({
+        code: 0,
+        stdout: args[0] === "ls" ? listing({ demo: true }) : "",
+        stderr: "",
+      });
+      const { mod, calls } = load(world);
+      const { cx, pending } = cxFor();
+      mod.sync(cx);
+      await Promise.all(pending);
+      assert.equal(world.store.get(DATA).demo, true);
+      assert.ok(!calls.exec.some(([, a]) => a[0] === "which"));
+      assert.equal(mod.demo(), true);
+    });
+
+    test("leaves fresh data alone", async () => {
+      world = stale();
+      const { mod, calls } = load(world);
+      const { cx, pending } = cxFor();
+      mod.sync(cx);
+      await Promise.all(pending);
+      assert.deepEqual(calls.exec, []);
+    });
   });
 
   test("no one-second timer: a copy that reads keeps only the 30 second timer, and the popup none", () => {
@@ -582,7 +641,6 @@ describe("mod behavior", () => {
               { name: "client", signedIn: false },
               { name: "work", signedIn: true },
             ].map((a) => ({ ...a, email: `${a.name}@example.com` })),
-            accountsAt: Date.now(),
             demo: true,
             cli: CLI,
             byPid: {},
