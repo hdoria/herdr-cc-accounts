@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true
+  },
+  "include": ["mods/cc-accounts/cli.js", "mods/cc-accounts/model.js", "scripts/*.mjs", "*.mjs", "*.cjs"]
+}

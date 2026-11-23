@@ -1,0 +1,16 @@
+{
+  "// why": "The mod runs inside Herdr, not in Node: its modules and globals are the ones of types/herdr.d.ts. strictNullChecks is off because Herdr's own jsconfig.json turns it off: a view assigns its state in init(), which TypeScript cannot see as a definite assignment, so every field would read as possibly undefined.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "types": [],
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "strictNullChecks": false,
+    "noEmit": true
+  },
+  "include": ["mods/cc-accounts/main.js", "mods/cc-accounts/model.js", "types/herdr.d.ts"]
+}

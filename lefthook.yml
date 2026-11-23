@@ -1,0 +1,35 @@
+# Pre-commit formats the staged files and commit-msg checks the message. The CI is the gate;
+# a hook that is slow or switched off is worth nothing, so these stay fast.
+
+# {pmx} runs the local binaries. It needs lefthook 1.10.8 or newer.
+templates:
+  pmx: pnpm exec
+
+pre-commit:
+  # ESLint and Prettier can write the same file, so they run one after the other, ESLint first.
+  # `priority` fixes the order; without it lefthook sorts the commands by name.
+  parallel: false
+  commands:
+    eslint:
+      priority: 1
+      glob: "*.{ts,mts,cts,js,mjs,cjs}"
+      run: "{pmx} eslint {staged_files} --max-warnings 0 --fix"
+      stage_fixed: true
+    prettier:
+      priority: 2
+      glob: "*.{ts,mts,cts,js,mjs,cjs,json,md,yml,yaml}"
+      run: "{pmx} prettier --write {staged_files}"
+      stage_fixed: true
+
+# What blocks a merge runs in the CI, on every pull request:
+#   pnpm run format:check
+#   pnpm run lint
+#   pnpm run type-check
+#   pnpm run test:coverage
+#   pnpm run build
+
+commit-msg:
+  commands:
+    conventional:
+      run: "{pmx} commitlint --edit {1}"
+      fail_text: "The message is not a Conventional Commit. See the Commits section of AGENTS.md."
