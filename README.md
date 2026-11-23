@@ -130,7 +130,7 @@ The header's `+` and the footer's `Add account` open a form at the top of the li
 
 ### Account state
 
-Every account shows one of three states, always as text beside the color:
+Every account shows one of four states, always as text beside the color (three sections, since `in use · needs login` stays in `IN USE`):
 
 | State                  | Meaning                                                                                        |
 | ---------------------- | ---------------------------------------------------------------------------------------------- |
@@ -247,6 +247,12 @@ herdr-app check mods/cc-accounts
 `pnpm test` runs the suite without the coverage threshold. `build` has nothing to compile, since Herdr loads the mod's JavaScript as it is: it checks that the folder the gallery copies is self-contained.
 
 Every process the tests start (the CLI, `install.sh`, `herdr-app check`) gets a temporary `HOME` (`herdr-app check` writes under `HOME/Library/Application Support`, and passes with an empty one). The tests only read the real process table. The mod tests that call `herdr-app` need it on `PATH` and are skipped without it. `test/model.test.mjs` tests the pure part of the mod (`mods/cc-accounts/model.js`: Claude detection, sections, the panes of each account, the click's commands, the name rule, the login tab). `test/mod-behavior.test.mjs` runs the mod's real source against recorded stand-ins for the Herdr modules (shared state included, so it can show that two copies run one read), so it needs nothing installed. `herdr-app check` cannot pass props to a mod, so the tests check copies of the mod whose `props()` returns fixed values, with accounts in the three states, which exercises the `chip`, `toggle`, `panel` (also with the add form open) and `menu` roles, and the `add` popup. The tests of `place-layout` run on small layout files in `test/fixtures/` and on `install.sh` with throwaway folders. Every CLI test puts a stand-in `security` first on `PATH`, so the real Keychain is never asked.
+
+## Contributing
+
+`AGENTS.md` has the rules for a person or an agent: where new code goes, the Definition of Done (the commands under "Tests" above) and the commit format. Commits follow Conventional Commits, and a hook and the CI check them.
+
+`.claude/settings.json` suggests two optional plugins (`pstack` and `mattpocock-skills`) to anyone who works on the repository with Claude Code. They are a convenience, not a requirement: nothing in the build, the tests or the CI uses them, and the repository works the same without Claude Code.
 
 ## Uninstall
 
