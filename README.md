@@ -1,40 +1,80 @@
-# herdr-cc-accounts
+<div align="center">
 
-![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg) ![Node 22 or newer](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:17463F,100:79B9A5&height=210&section=header&text=cc-accounts&fontColor=F6F5ED&fontSize=64&fontAlignY=36&desc=several%20Claude%20Code%20accounts%2C%20side%20by%20side%20in%20Herdr&descAlignY=58&descSize=18" width="100%" alt="cc-accounts" />
 
-![The cc-accounts panel in Herdr](preview.png)
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=20&pause=1300&color=79B9A5&center=true&vCenter=true&width=760&lines=One+Claude+Code+account+per+pane;See+which+account+each+pane+runs;Add+an+account+and+log+in+from+the+panel;Remove+an+account+and+its+Keychain+login;Your+MCP+servers+and+skills+in+every+account" alt="What cc-accounts does" />
 
-Claude Code accounts side by side in Herdr.app. Each pane opens already in the account you choose, accounts run at the same time, and a button in the tab bar opens a side panel that shows which account the focused pane uses, which accounts are in use, which panes use each one and which accounts need a login.
+<br/>
 
-Switching with `/login` changes the account for the whole machine. Here every account has its own `CLAUDE_CONFIG_DIR`, so the choice belongs to one process.
+<a href="#install"><img src="https://img.shields.io/badge/install-from%20the%20gallery-17463F?style=for-the-badge" alt="Install from the Herdr gallery" /></a>
+<a href="https://herdr.dev/mods/hdoria/herdr-cc-accounts"><img src="https://img.shields.io/badge/Herdr.app-mod-18332E?style=for-the-badge" alt="Herdr.app mod" /></a>
+<a href="#requirements"><img src="https://img.shields.io/badge/macOS-18332E?style=for-the-badge&logo=apple&logoColor=79B9A5" alt="macOS" /></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-18332E?style=for-the-badge" alt="MIT license" /></a>
+<a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522-18332E?style=for-the-badge&logo=nodedotjs&logoColor=79B9A5" alt="Node 22 or newer" /></a>
+<a href="https://github.com/hdoria/herdr-cc-accounts/actions/workflows/ci.yml"><img src="https://github.com/hdoria/herdr-cc-accounts/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
 
-## How it works
+<br/><br/>
 
-- The **default account** is the one you already have: `~/.claude`, with `CLAUDE_CONFIG_DIR` unset.
-- Every other account is a folder, `~/.claude-accounts/<name>/`. The filesystem is the registry: there is no config file that can drift.
-- Claude Code keeps each folder's login in its own credential store (on macOS, a Keychain item whose name carries a hash of the folder; see "How it is known" below). The login itself is never read or copied: no token, no credential file and no Keychain item is touched, except that `cc-accounts remove` deletes the Keychain item of the one account you remove (see [What `remove` does](#what-remove-does)). One thing does travel, though: the `mcpServers` replicated from `~/.claude.json` can carry secrets in their `env` or `headers`, and they are written into each account's `.claude.json` (mode 0600). Treat every account folder as holding the same MCP secrets as `~/.claude.json`.
-- What is yours rather than the account's (skills, agents, commands, hooks, plugins, output styles, `CLAUDE.md`, `settings.json`, `keybindings.json`) is shared by symbolic links to `~/.claude`.
-- History (`projects`, `plans`, `todos`, `file-history`, `shell-snapshots`, `history.jsonl`) is linked too, so `--resume` finds a conversation started in any account.
-- Account state (`.credentials.json`, `.claude.json`, `sessions`, caches and the rest of the runtime) is never linked.
-- From `~/.claude.json`, each account's own `.claude.json` receives the top-level `mcpServers` and, for each project, `mcpServers`, `allowedTools`, `hasTrustDialogAccepted`, `enabledMcpjsonServers` and `disabledMcpjsonServers`. The rest of the account's file is kept as it is. The merge is a union: an MCP server you remove from the default account does not disappear from the other accounts. Remove it there too. `allowedTools`, `enabledMcpjsonServers` and `disabledMcpjsonServers` are unions as well, with the default account's entries first, no duplicates, and whatever only the account has kept at the end. A permission you revoke in the default account therefore stays in the others until you revoke it there too. `hasTrustDialogAccepted` never goes from true back to false.
+**cc-accounts** runs several Claude Code accounts at once, each Herdr pane in the account you choose.<br/>
+Every extra account is a folder that Claude Code gets as its `CLAUDE_CONFIG_DIR`, so each process has its own account instead of one for the whole machine.<br/>
+A button in the tab bar opens a panel that shows which account each pane uses, and adds, logs in and removes accounts.
 
-The table that decides all of this is one object, `SHARING`, at the top of `mods/cc-accounts/cli.js`.
+</div>
 
-## Requirements
+<br/>
 
-Node 22 or newer (older versions are not tested), Claude Code (`claude` on `PATH`) and Herdr.app. `cc-accounts which` reads a process environment with `ps -E`, which is the macOS form; elsewhere it answers `unknown`.
+## The problem
+
+I work with separate Claude Code accounts: the company's, a client's and my own. By default Claude Code keeps one login for the whole machine, and `/login` in one pane changes the account of every other pane and of every Claude started afterwards.
+
+So I logged out and back in several times a day. Each switch also moved the sessions I already had open, and they went on in the wrong account.
+
+The tools I found work at the same level. Some swap the global credential, so only one account is live at a time. Others copy the OAuth token and refresh it, which makes them hold a secret I would rather nothing touched. cc-accounts gives each account its own folder and leaves the login where Claude Code put it.
+
+## Without and with cc-accounts
+
+| Without                                                                    | With cc-accounts                                                                                    |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `/login` in one pane changes the account of every pane                     | Each pane runs `cc-accounts run <name>`, which starts Claude with that account's folder             |
+| No way to tell which account a pane is on                                  | The tab-bar button shows the focused pane's account, and the panel lists the panes of each account  |
+| Logging out to reach another account                                       | Each account keeps its own login, in a Keychain item whose name carries a hash of its folder's path |
+| Skills, hooks and `settings.json` set up again for each account            | Symbolic links to `~/.claude`, so every account has the same ones                                   |
+| MCP servers added again in each account                                    | `mcpServers` and each project's trust and allowed tools are merged in from `~/.claude.json`         |
+| Separate `CLAUDE_CONFIG_DIR` folders split the history `--resume` searches | The history is linked too, so `--resume` finds a conversation started in any account                |
+| Moving a conversation to another account means switching the whole machine | **Continue here in a fork** opens a pane that resumes it in the other account with `--fork-session` |
+| A deleted account folder leaves its login behind in the Keychain           | `cc-accounts remove` deletes the account's Keychain item, then its folder                           |
+
+<br/>
+
+## What it looks like
+
+<div align="center">
+<img src="preview.png" width="420" alt="The cc-accounts panel in demo mode, with three sample accounts in the sections In use, Signed in and Needs login" />
+<br/>
+<sub>Demo mode (<code>cc-accounts demo on</code>), with sample accounts. The accounts sit in sections by status: <b>IN USE</b>, <b>SIGNED IN</b> and <b>NEEDS LOGIN</b>. <code>work</code> runs in the focused pane and lists its two panes, each with its agent status. <code>personal</code> has the new-tab and fork buttons. <code>client</code> has no login, so it has the login button, and it has the remove button because it has its own folder and no pane. <code>personal</code> stands for the default account, which has no remove button.</sub>
+</div>
+
+<br/>
 
 ## Install
 
 ### From the Herdr gallery
 
-The mod is the folder `mods/cc-accounts/`. Copy it to `~/.config/herdr-app/mods/cc-accounts/`, which is what an agent does when you ask Herdr for it, and merge `keys.json` into `~/.config/herdr-app/keys.json`. The CLI lives in that folder too, as `mods/cc-accounts/cc-accounts`, and the mod runs it by that path, so nothing else needs to be on your `PATH`. To use the CLI from a terminal, link it:
+Ask the agent in Herdr.app to add it:
+
+```text
+Read ~/.config/herdr-app/AGENTS.md, then add this mod: herdr.dev/mods/hdoria/herdr-cc-accounts
+```
+
+The agent will tell you that the mod runs programs and reads files outside its folder. [Safety](#safety) lists every one of them.
+
+The agent copies the folder `mods/cc-accounts/` to `~/.config/herdr-app/mods/cc-accounts/` and merges `keys.json` into `~/.config/herdr-app/keys.json`. The CLI lives in that folder too, as `mods/cc-accounts/cc-accounts`, and the mod runs it by that path, so nothing else needs to be on your `PATH`. To use the CLI from a terminal, link it:
 
 ```sh
 ln -s ~/.config/herdr-app/mods/cc-accounts/cc-accounts ~/.local/bin/cc-accounts
 ```
 
-The mod runs programs and reads files outside its own folder. "What it reads and writes outside the repo" below lists all of them.
+That gives you the popup on `ctrl-shift-a`. The tab-bar button and the panel need two nodes in your layout. From a clone of this repository, `node scripts/place-layout.mjs apply` adds them to a layout of your own. It refuses Herdr's `main`, `terminals` and `win98`, which Herdr replaces on every start. You can also paste them by hand, as [the button and the panel in your layout](#the-toggle-button-and-the-panel) shows.
 
 ### From this repository
 
@@ -43,6 +83,11 @@ The mod runs programs and reads files outside its own folder. "What it reads and
 ./install.sh --layout   # the same, then the tab-bar button and the panel in the shown layout
 ./install.sh --remove   # only take the button and the panel out of the shown layout again
 ```
+
+<details>
+<summary><b>What <code>install.sh</code> does, step by step</b></summary>
+
+<br/>
 
 In this order, the script:
 
@@ -56,16 +101,14 @@ In this order, the script:
 
 If the key cannot be written (for example the Herdr folder is read-only), it aborts with a message and a non-zero exit. Running it again changes nothing and makes no extra backup. `HOME` and `HERDR_APP_HOME` are honored, so you can try it against throwaway folders.
 
-Then create your accounts:
+</details>
 
-```sh
-cc-accounts add work
-cc-accounts add personal
-```
+<a id="the-toggle-button-and-the-panel"></a>
 
-In each new account, open a tab with `cc-accounts run <name>` and use `/login`. The panel can do both steps for you: see [Adding an account from the panel](#adding-an-account-from-the-panel).
+<details>
+<summary><b>The button and the panel in your layout</b></summary>
 
-### The toggle button and the panel
+<br/>
 
 `./install.sh --layout` runs `scripts/place-layout.mjs apply` on the layout Herdr is showing (the `layout` key of `~/.config/herdr-app/shared.json`; `HERDR_APP_HOME` is honored). It adds two nodes, and only these:
 
@@ -103,13 +146,32 @@ in the `children` of the row that holds `tabs`, and
 
 right after the `main` block (`"content": { "tab": "active" }`) in the `children` of the row that holds it.
 
+</details>
+
+### Requirements
+
+Node 22 or newer (older versions are not tested), Claude Code (`claude` on `PATH`) and Herdr.app. `cc-accounts which` reads a process environment with `ps -E`, which is the macOS form; elsewhere it answers `unknown`.
+
+<br/>
+
+## Use
+
+### Open the panel
+
+Click the account button in the tab bar to open the panel, and click it again to close it. The panel follows the focused pane. `ctrl-shift-a` opens the same list as a popup.
+
+<details>
+<summary><b>What the panel shows</b></summary>
+
+<br/>
+
 The panel is laid out like this:
 
 - A header with the accounts icon, `Claude accounts`, a chip (`this pane · <account>`, or `no Claude here`) and a close button that runs `layout.hide`.
 - A strip of numbers: `Accounts`, `In use`, `Panes`, and `Needs login` only when at least one account has no login, in the `blocked` color.
 - The accounts in sections with a colored label and a count: `IN USE · n`, `SIGNED IN · n`, `NEEDS LOGIN · n`. An empty section is not drawn. The focused pane's account leads its section.
 - One compact row per account: the avatar, the name over the email in small text, the number of panes (`2 panes`), a check on the account of the focused pane and icon buttons with a tooltip. `+` opens a new tab in the account. The fork icon, **Continue here in a fork**, appears when the focused pane has a live session, the account is another one and it has a login. An account with no login only has the `log-in` icon, which opens a tab named `<name> login` running `cc-accounts run <name>` with `/login` as its first message (the icon's tooltip still says to run `/login` once Claude is open, in case that message does not arrive: see [Unverified assumptions](#unverified-assumptions)).
-- A trash icon, tooltip `Remove account`, on the accounts that have a folder of their own and no pane: see [Removing an account](#removing-an-account-from-the-panel).
+- A trash icon, tooltip `Remove account`, on the accounts that have a folder of their own and no pane: see [Removing an account from the panel](#removing-an-account-from-the-panel).
 - A `+` button in the header, with the tooltip `Add account`.
 - A footer with the reminder that a running process keeps its account, and an `Add account` button.
 
@@ -117,46 +179,12 @@ The panel is laid out like this:
 
 A hidden panel runs no command, and it reads again as soon as it is shown. The panel follows the focused pane.
 
-### Adding an account from the panel
+</details>
 
-The header's `+` and the footer's `Add account` open a form at the top of the list: a name box with the keyboard already in it, **Cancel** and **Create**. Enter creates and Esc cancels.
+<details>
+<summary><b>The chip and the popup</b></summary>
 
-- **The name is checked as you type**, with the rule `cc-accounts add` applies (`^[a-z0-9][a-z0-9-]*$`, not `default`, not the name the default account is shown under, and, only in the form, not an account that already exists). The message appears under the box in the `blocked` color. The rule is one function, `nameProblem` in `mods/cc-accounts/model.js`, which the CLI imports too, so the two cannot drift and the folder stays self-contained.
-- **Create** runs `cc-accounts add <name>` through the same CLI the mod already resolved, and the button reads `Creating…` while it runs. If it fails, the first line of its error stays in the form, so the name can be corrected. If it works, the mod opens a focused tab named `<name> login` that runs `cc-accounts run <name>` with `task: "/login"`, reads the list again so the account is on it, and closes the form.
-- **In demo mode** the button is there, but Create runs nothing and says `demo mode`.
-- **In the popup** (`ctrl-shift-a`) the list ends with an `Add account…` item, and the header has the same `+`. A popup cannot change size after it opens and the panel may not be in your layout, so both open a second, small popup that holds only the form. It works the same, and closes when the account is created or on Esc.
-- A block can start with the form already open with `props.form` set to `"open"`. That is how the tests check the open form with `herdr-app check`.
-
-### Removing an account from the panel
-
-The trash icon is in the panel only, never in the popup. It is missing on the default account and on an account that a pane uses. A click opens a question inside the row: `Remove <name>? Its login is deleted from the Keychain.`, with **Cancel**, **Remove** (in the `blocked` color) and, when the folder holds content of its own (see [What counts as the account's own content](#what-counts-as-the-accounts-own-content)), the list of it, which goes with the folder.
-
-- **Remove** reads the list again first. If the content that would be deleted is not what you were shown, it stops, shows the new list and waits for you to confirm again. That read is not what the safety rests on: another copy of the mod may hold the read lock, and then no read happens. So it always runs `cc-accounts remove <name> --yes --expect-own=<the names you were shown, separated by commas>` (empty when none were shown), and the CLI refuses when the folder holds anything else. After a successful removal it reads the list again. The button reads `Removing…` meanwhile, and the command may take up to 120 seconds (its limit in the panel) because the Keychain can make it wait. If the first read shows demo mode, Remove runs nothing and says `demo mode`.
-- **An error** (the account is in use by a Claude outside Herdr, the Keychain refused) stays in the row, short, and nothing is closed.
-- **In demo mode** the question opens, but Remove runs nothing and says `demo mode`.
-- A block can start with the question open with `props.remove` set to the account's name. That is how the tests check it with `herdr-app check`.
-
-**One reader.** The button, the panel, the chip and the popup are separate copies of the mod. They share the result of the last read through Herdr's shared state, and a short lock makes only one of them run `cc-accounts ls` and `cc-accounts which`. A read starts when the focused pane or the set of Claude panes changes (the render runs on those), and a 30 second timer re-reads. There is no faster timer.
-
-### Account state
-
-Every account shows one of four states, always as text beside the color (three sections, since `in use · needs login` stays in `IN USE`):
-
-| State                  | Meaning                                                                                        |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `in use · N panes`     | At least one Herdr pane runs Claude in this account. Section `IN USE`.                         |
-| `in use · needs login` | The same, but the account has no login (yet). It stays in `IN USE` and has no "Continue here". |
-| `signed in`            | The account has a login and no pane uses it now.                                               |
-| `needs login`          | The account exists, has no login and no pane.                                                  |
-
-The check marks the account of the focused pane. A pane running Claude wins over the login: an account with a Claude open in it reads `in use` even if the login is still missing. The `Needs login` number counts every account without a login, in use or not.
-
-How it is known:
-
-- **Login.** On macOS, whether the generic Keychain item exists: service `Claude Code-credentials` for the default account and `Claude Code-credentials-<first 8 hex of sha256 of the config folder path, NFC>` for the others, with the user name as the item's account. The user name is `USER` (else the system's), and `claude-code-user` when it is not made of `[a-zA-Z0-9._-]`, as Claude does. If `CLAUDE_SECURESTORAGE_CONFIG_DIR` is set in the environment of `cc-accounts`, it takes the place of the folder in the hash for every account, so all of them read the same. The lookup is `security find-generic-password -s <service> -a <user>` and only its exit code is used: never `-w` or `-g`, so the secret is not even requested. A `<folder>/.credentials.json` also counts as a login, on macOS too. Elsewhere only that file counts. It is exposed as `signedIn` in `cc-accounts ls --json`. The service formula was checked against Claude Code's binary, version 2.1.330. **`signed in` only means that the item or the file exists.** It is not read, so an expired or revoked login still reads `signed in`.
-- **In use.** The mod takes every local terminal whose foreground process is a Claude and asks `cc-accounts which <pid> [<pid>...]` once for all of them. A pane counts as Claude only by the name of its executable (`fg.name` or the basename of `argv[0]`) being `claude`, or by `argv[1]` being a `cc-accounts` script followed by `run` (the wrapper). `vim ~/.claude/settings.json`, `less claude.log` and `cc-accounts ls` are not Claude.
-
-### The chip and the popup
+<br/>
 
 `ctrl-shift-a` opens the popup, the same list as the panel in a small window. To see the focused pane's account without the panel, put a block in a bar of your layout in `~/.config/herdr-app/layouts/`:
 
@@ -171,9 +199,74 @@ How it is known:
 
 The chip follows the focused pane when it runs a local Claude; on any other pane it reads "no Claude". Clicking it opens the popup.
 
-The popup has the same rows and sections as the panel, without the numbers strip, and ends with `Add account…`. Each row has the `+` button, which opens `cc-accounts run <name>` in a new tab, and, when the focused pane has a live session in another account, the fork button, **Continue here in a fork**. That one opens a pane to the right with `terminal.open`, passing the command as an `argv` list and the session's folder as `folder`, so no shell and no quoting are involved: `cc-accounts run <name> --resume <id> --fork-session`. The fork matters: without it two live Claude processes would write to the same conversation.
+The popup has the same rows and sections as the panel, without the numbers strip, and ends with `Add account…`. Each row has the `+` button, which opens `cc-accounts run <name>` in a new tab, and, when the focused pane has a live session in another account, the fork button, **Continue here in a fork**.
 
-## Commands
+</details>
+
+<details>
+<summary><b>One reader for every copy of the mod</b></summary>
+
+<br/>
+
+The button, the panel, the chip and the popup are separate copies of the mod. They share the result of the last read through Herdr's shared state, and a short lock makes only one of them run `cc-accounts ls` and `cc-accounts which`. A read starts when the focused pane or the set of Claude panes changes (the render runs on those), and a 30 second timer re-reads. There is no faster timer.
+
+</details>
+
+### Add an account and log in
+
+In the panel, click `+` in the header or **Add account** in the footer, type a name and click **Create** (or press Enter). The mod runs `cc-accounts add <name>`. It then opens a tab named `<name> login` that starts Claude in the new account with `/login` as its first message.
+
+From a terminal:
+
+```sh
+cc-accounts add work
+cc-accounts add personal
+```
+
+In each new account, open a tab with `cc-accounts run <name>` and use `/login`.
+
+<a id="adding-an-account-from-the-panel"></a>
+
+<details>
+<summary><b>Adding an account from the panel, in detail</b></summary>
+
+<br/>
+
+The header's `+` and the footer's `Add account` open a form at the top of the list: a name box with the keyboard already in it, **Cancel** and **Create**. Enter creates and Esc cancels.
+
+- **The name is checked as you type**, with the rule `cc-accounts add` applies (`^[a-z0-9][a-z0-9-]*$`, not `default`, not the name the default account is shown under, and, only in the form, not an account that already exists). The message appears under the box in the `blocked` color. The rule is one function, `nameProblem` in `mods/cc-accounts/model.js`, which the CLI imports too, so the two cannot drift and the folder stays self-contained.
+- **Create** runs `cc-accounts add <name>` through the same CLI the mod already resolved, and the button reads `Creating…` while it runs. If it fails, the first line of its error stays in the form, so the name can be corrected. If it works, the mod opens a focused tab named `<name> login` that runs `cc-accounts run <name>` with `task: "/login"`, reads the list again so the account is on it, and closes the form.
+- **In demo mode** the button is there, but Create runs nothing and says `demo mode`.
+- **In the popup** (`ctrl-shift-a`) the list ends with an `Add account…` item, and the header has the same `+`. A popup cannot change size after it opens and the panel may not be in your layout, so both open a second, small popup that holds only the form. It works the same, and closes when the account is created or on Esc.
+- A block can start with the form already open with `props.form` set to `"open"`. That is how the tests check the open form with `herdr-app check`.
+
+</details>
+
+### Remove an account
+
+The trash icon on an account's row in the panel asks first, then runs `cc-accounts remove <name> --yes` with the list of the account's own content it showed you. That command deletes the account's Keychain item, then its folder. From a terminal, run `cc-accounts remove <name>`, which asks you to type the name. The default account and an account that a pane uses have no trash icon.
+
+<a id="removing-an-account-from-the-panel"></a>
+
+<details>
+<summary><b>Removing an account from the panel, in detail</b></summary>
+
+<br/>
+
+The trash icon is in the panel only, never in the popup. It is missing on the default account and on an account that a pane uses. A click opens a question inside the row: `Remove <name>? Its login is deleted from the Keychain.`, with **Cancel**, **Remove** (in the `blocked` color) and, when the folder holds content of its own (see [What counts as the account's own content](#what-counts-as-the-accounts-own-content)), the list of it, which goes with the folder.
+
+- **Remove** reads the list again first. If the content that would be deleted is not what you were shown, it stops, shows the new list and waits for you to confirm again. That read is not what the safety rests on: another copy of the mod may hold the read lock, and then no read happens. So it always runs `cc-accounts remove <name> --yes --expect-own=<the names you were shown, separated by commas>` (empty when none were shown), and the CLI refuses when the folder holds anything else. After a successful removal it reads the list again. The button reads `Removing…` meanwhile, and the command may take up to 120 seconds (its limit in the panel) because the Keychain can make it wait. If the first read shows demo mode, Remove runs nothing and says `demo mode`.
+- **An error** (the account is in use by a Claude outside Herdr, the Keychain refused) stays in the row, short, and nothing is closed.
+- **In demo mode** the question opens, but Remove runs nothing and says `demo mode`.
+- A block can start with the question open with `props.remove` set to the account's name. That is how the tests check it with `herdr-app check`.
+
+</details>
+
+### Continue a session in another account
+
+When the focused pane has a live session, every other account that has a login shows the fork button, **Continue here in a fork**. It opens a pane to the right with `terminal.open` and runs `cc-accounts run <name> --resume <id> --fork-session` there. The command goes as an `argv` list with the session's folder as `folder`, so no shell and no quoting are involved. The fork matters. Without it, two live Claude processes would write to the same conversation.
+
+### Commands
 
 | Command                                                       | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -185,71 +278,51 @@ The popup has the same rows and sections as the panel, without the numbers strip
 | `cc-accounts which <pid> [<pid>...]`                          | Prints `<pid> <account>`, one line per pid and in the order given. The account is only ever a known account name or `unknown`. A pid that is not running prints `unknown`, after all lines are printed the exit code is 1.                                                                                                                                                                                                                                    |
 | `cc-accounts demo on\|off`                                    | Turns demo mode on or off.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
-### Demo mode
+<br/>
 
-`cc-accounts demo on` creates the flag file `~/.claude-accounts/.demo`, and `cc-accounts demo off` removes it. While it exists, `ls` and `ls --json` list three sample accounts instead of yours, and say `"demo": true`:
+## How it works
 
-| Account                          | E-mail                 | State           |
-| -------------------------------- | ---------------------- | --------------- |
-| `personal` (the default account) | `personal@example.com` | signed in       |
-| `client`                         | `client@example.com`   | needs login     |
-| `work`                           | `work@example.com`     | in use, 2 panes |
+The default account is the one you already have, `~/.claude` with `CLAUDE_CONFIG_DIR` unset. Every other account is a folder, `~/.claude-accounts/<name>/`, and a process belongs to the account whose folder it was started with. Claude Code keeps each folder's login in its own Keychain item, so `cc-accounts` never handles a token. Your skills, agents, hooks, `CLAUDE.md`, `settings.json` and the conversation history are symbolic links to `~/.claude`. The MCP servers and each project's trust are merged into each account's `.claude.json`.
 
-The mod follows the CLI: when it sees `demo: true` it also draws two sample panes of `work`, in the spaces `api-server` and `web-app`, and it ignores the real panes. Nothing real is shown, which is what you want for the screenshot in `preview.png`. In demo mode a click on a sample account or pane does nothing, `which` is not asked and no session file is read. The other commands (`add`, `sync`, `run`) still work on your real accounts.
+[`docs/adr/0001-one-claude-config-dir-per-account.md`](docs/adr/0001-one-claude-config-dir-per-account.md) records the decision and the alternatives it rejected. Some of Claude Code's side of this, such as the Keychain item per folder, is not yet checked against a real login. [Unverified assumptions](#unverified-assumptions) lists each one.
 
-### The default account's name
+<details>
+<summary><b>What each account shares, and what it keeps</b></summary>
 
-The implicit account is called `default`. To show another name, put it on one line in `~/.claude-accounts/.default-name`. It must match the same pattern as any account name and must not collide with an existing account folder; otherwise `default` is used. The name applies to `ls`, `which`, `run <name>` (`run default` always works too) and the mod.
+<br/>
 
-### What `sync` does with a link that was replaced
+- The **default account** is the one you already have: `~/.claude`, with `CLAUDE_CONFIG_DIR` unset.
+- Every other account is a folder, `~/.claude-accounts/<name>/`. The filesystem is the registry: there is no config file that can drift.
+- Claude Code keeps each folder's login in its own credential store (on macOS, a Keychain item whose name carries a hash of the folder; see [Account state](#account-state)). The login itself is never read or copied: no token, no credential file and no Keychain item is touched, except that `cc-accounts remove` deletes the Keychain item of the one account you remove (see [What `remove` does](#what-remove-does)). One thing does travel, though: the `mcpServers` replicated from `~/.claude.json` can carry secrets in their `env` or `headers`, and they are written into each account's `.claude.json` (mode 0600). Treat every account folder as holding the same MCP secrets as `~/.claude.json`.
+- What is yours rather than the account's (skills, agents, commands, hooks, plugins, output styles, `CLAUDE.md`, `settings.json`, `keybindings.json`) is shared by symbolic links to `~/.claude`.
+- History (`projects`, `plans`, `todos`, `file-history`, `shell-snapshots`, `history.jsonl`) is linked too, so `--resume` finds a conversation started in any account.
+- Account state (`.credentials.json`, `.claude.json`, `sessions`, caches and the rest of the runtime) is never linked.
+- From `~/.claude.json`, each account's own `.claude.json` receives the top-level `mcpServers` and, for each project, `mcpServers`, `allowedTools`, `hasTrustDialogAccepted`, `enabledMcpjsonServers` and `disabledMcpjsonServers`. The rest of the account's file is kept as it is. The merge is a union: an MCP server you remove from the default account does not disappear from the other accounts. Remove it there too. `allowedTools`, `enabledMcpjsonServers` and `disabledMcpjsonServers` are unions as well, with the default account's entries first, no duplicates, and whatever only the account has kept at the end. A permission you revoke in the default account therefore stays in the others until you revoke it there too. `hasTrustDialogAccepted` never goes from true back to false.
 
-Claude can replace a link with a regular file when it writes (for example `settings.json` after `/config`). `sync` never deletes it: it renames the file to `<name>.divergent-<epoch>-<pid>-<random>`, recreates the link and says so. The name is unique per process, so parallel syncs never overwrite each other's kept content, and a link that already points to the right place is never kept as divergent. This applies to every link and history entry. What is left in `.divergent-*` is yours to review and delete.
+The table that decides all of this is one object, `SHARING`, at the top of `mods/cc-accounts/cli.js`.
 
-Entries of `~/.claude` that are in no list are not linked. `sync` reports them as "unclassified" so you can decide where they go in the table.
+</details>
 
-### What counts as the account's own content
+<br/>
 
-`remove` deletes the folder, so it first lists what is in it that exists nowhere else, and asks for `--yes` (and the panel for its confirmation) before it goes on. An entry of the account folder counts as its own content when it is:
+## Safety
 
-- a `.divergent-*` file, which `sync` moved aside (also when its name starts with a `.`);
-- an entry of the link or history table that is not the link `sync` puts there: a real file or folder (a `projects/` of its own, a `settings.json` Claude wrote), or a link that points somewhere else;
-- anything the sharing table does not know.
+`cc-accounts` runs on your computer, with your user's permissions, and does not use the network.
 
-What does not count, and goes with the folder without a word, is the private state of the table: `.credentials.json`, `.claude.json`, `sessions`, `session-env`, `statsig`, `telemetry`, `logs`, `debug`, `cache`, `backups` and the other runtime entries listed as private in `mods/cc-accounts/cli.js`, plus the hidden files `.last-cleanup` and `.DS_Store` (Finder leaves the latter in any folder it opens) and any name starting with `daemon`. A hidden entry that is not in that list (a `.secret-notes` somebody put there, say) is not known to be runtime state, so it counts as content. The one exception is `agent-memory*`, memory that agents wrote: it counts as content. Names are shown with anything that is not plain printable ASCII, a backslash or a comma written as `\u{hex}`.
+- **It never reads or copies a token.** On macOS it runs only two Keychain commands. `security find-generic-password -s <service> -a <user>` says, by its exit code, whether a login exists. `security delete-generic-password -s <service> -a <user>` deletes the item of the one account you remove. Neither runs with `-w` or `-g`, so the secret is never requested.
+- **It never writes to `~/.claude` or `~/.claude.json`.** It writes under `~/.claude-accounts/`. `./install.sh` also writes `~/.local/bin/cc-accounts`, `~/.config/herdr-app/mods/cc-accounts/`, `~/.config/herdr-app/keys.json` and, with `--layout`, the shown layout file, and backs up the last two first.
+- **It runs** its own CLI, `ps`, `pgrep`, `security`, and `claude` when you start it with `cc-accounts run <name>`.
+- **It reads** `~/.claude` (entries, link targets and `settings.json`), `~/.claude.json`, each account's `.claude.json` for the e-mail, `~/.claude-accounts/.default-name` and `~/.claude*/sessions/<pid>.json` for the focused pane's session. Through `ps -E` it reads the environment of Claude processes and keeps only `CLAUDE_CONFIG_DIR`. It checks that `.demo` and `.credentials.json` exist without opening them.
+- **MCP secrets travel.** The `mcpServers` of `~/.claude.json` can carry secrets in `env` or `headers`, and they are copied into each account's `.claude.json` (mode 0600). Treat every account folder as holding the same MCP secrets as `~/.claude.json`.
 
-### What `remove` does
+To report a vulnerability, follow [`SECURITY.md`](SECURITY.md).
 
-`cc-accounts remove <name> [--yes] [--expect-own=<name,...>]` is the one way to delete an account that leaves nothing behind. In this order:
+<a id="what-it-reads-and-writes-outside-the-repo"></a>
 
-1. It refuses the default account (and the name it is shown under), an invalid name and an account that does not exist. A link in place of an account folder is not an account. It also refuses a folder that is not a plain folder directly inside the real `~/.claude-accounts`, and notes which folder it is (device and inode).
-2. It lists the account's own content (see above). With `--expect-own` it refuses unless that list is exactly the one given, in any order; `--expect-own=` means "nothing". Without `--yes` it refuses when the list is not empty. With `--yes` it goes ahead and names the content in its answer.
-3. It checks that it can delete: write access to the account folder, to every real folder inside it (links are not entered) and to the folder that holds the accounts. If one is missing it refuses before the Keychain, because the login cannot be brought back. Without `--yes` it asks for a terminal and for the account's name typed in. With no terminal it refuses, so a script has to say `--yes`.
-4. It refuses when a live process of yours has `CLAUDE_CONFIG_DIR` pointing at the folder. It reads that as `which` does, over `pgrep -u <uid> -x claude`, `pgrep -u <uid> -f "cc-accounts run"` and the children of every `cc-accounts run` wrapper of any copy of the CLI (`pgrep -P`; a wrapper that has no `claude` yet counts by the account name in its arguments, so it holds that account and no other), and also over every other process of yours whose command line says "claude" in any case (`pgrep -u <uid> -f -i claude`: `node` with or without flags, `bun`, `nodejs`, `node22`, a path with a space, `claude-code/cli.mjs`). Each of those has its `CLAUDE_CONFIG_DIR` read the same way. One that points to the account counts as running, and one whose environment cannot be read while its command line says "claude" makes the answer "cannot tell", but only when its executable can be a Claude itself (`claude`, `node`, `nodejs`, `node<version>`, `bun` or `deno`, by the name of the program or the first word of its command line). A shell, `tmux` or a binary of the system with "claude" in its command line and an environment that cannot be read is ignored, because the Claude it started is a process of its own and is read on its own; one of those whose environment can be read and points to the account still counts as running. More than 200 candidates is "cannot tell". What stays unseen is a Claude whose command line never says "claude" (a renamed copy, a launcher that loads it) and one whose environment `ps` does not show; the account then reads as free. When it cannot tell, it refuses and says why: `pgrep` fails, an environment cannot be read, a wrapper has no `claude` yet and the name in its arguments cannot be read, or a `CLAUDE_CONFIG_DIR` is relative, starts with `~`, does not exist or cannot be resolved (it is never read as "some other folder").
-5. After the name is typed, it lists the content again and refuses if it changed meanwhile.
-6. It looks at the processes again, right before the Keychain.
-7. On macOS it deletes the Keychain item with `security delete-generic-password -s <service> -a <user>`, no output kept, never with `-w` or `-g`, and waits at most 60 seconds for it. An item that is not there is not an error: `security` answers 44, the low byte of the OSStatus `errSecItemNotFound` (-25300), as checked on a Mac. The effect of a false "not found" is an orphan item left in the Keychain, never a deletion of more than this account's item. If `security` does not answer in time, it is killed, the command stops, the folder stays and the answer says the item may still be there. With `CLAUDE_SECURESTORAGE_CONFIG_DIR` set the item is shared by every account, so it is left alone and the answer says so. Any other failure stops the command and the folder stays. Elsewhere the login file goes with the folder.
-8. It checks the folder again: the accounts root is still safe, the folder is still a plain folder inside it and it is the same one (same device and inode) as at step 1. It lists the own content once more and looks at the processes once more. If the folder was swapped, the content is not the list it accepted or a Claude started, it deletes nothing and says that the Keychain step already ran and the folder was kept.
-9. It deletes the folder. The links to `~/.claude` are removed as links; their targets are never followed, and `~/.claude` stays byte for byte as it was. If the deletion fails, the login is already gone from the Keychain: the answer says so and that running `cc-accounts remove <name> --yes` again finishes the job.
+<details>
+<summary><b>What it reads and writes outside the repo</b></summary>
 
-### How `which` finds the account
-
-`which` never prints text that came from `ps`. It reads the process's `CLAUDE_CONFIG_DIR` (separating the environment from the arguments by comparing `ps` with and without `-E`), resolves it with `realpath` and matches it against the known account folders. If the process is a `cc-accounts run <name>` wrapper (Node has no `exec`, so the wrapper sits in front of `claude`), it is recognized by its command line resolving to this very script, and the answer is read from the environment of its `claude` child (`pgrep -P`); the name in its arguments is never used. If the environment cannot be read, the child is missing or several `CLAUDE_CONFIG_DIR=` appear in it, the answer is `unknown`, never `default`.
-
-`ps` joins the variables with plain spaces, so one case cannot be told apart: a single `CLAUDE_CONFIG_DIR` whose value contains a space followed by something that looks like another variable is read as the shorter value. The output is still only a known account name, never text from `ps`, and a process of your own user can only mislabel its own chip.
-
-A known limit of the same kind: a variable whose value contains the text, as in `AAA="x CLAUDE_CONFIG_DIR=..."`, looks to `ps` like a `CLAUDE_CONFIG_DIR` of its own. A second one makes the answer `unknown`, and if it is the only one it is read as the real one. The answer is again only a known account name or `unknown`, never the text.
-
-The wrapper check looks at the first three `run` markers of the command line and at most four starting points for each, so a very long command line costs a fixed number of lookups.
-
-### Safety checks
-
-If `~/.claude-accounts` is a symbolic link, or if it and `~/.claude` overlap on disk, every command refuses to run with an explanation. Links and writes would otherwise land in the wrong place.
-
-The account's `.claude.json` is written through a temporary file with a random name, created exclusively with mode 0600, then renamed. The file is re-checked just before the rename; if it changed while merging (for example Claude just saved a login), the merge is redone once instead of overwriting the other write. This narrows the race, it does not remove it: do not run `sync` against an account while its Claude is running. `run` syncs before Claude starts, which is the safe moment, but it cannot see a second pane of the same account that is already running.
-
-If an account's `.claude.json` or `.credentials.json` is a symbolic link, `sync` and `add` refuse (and `run` only warns), because a write would land somewhere else. Before `add` creates `~/.claude-accounts`, it checks where the folder would really be, and refuses if that is inside `~/.claude`.
-
-## What it reads and writes outside the repo
+<br/>
 
 Reads:
 
@@ -269,7 +342,198 @@ Writes:
 
 It never writes to `~/.claude` or `~/.claude.json`. It does not read or write credentials. The Keychain is asked whether an item exists and, for `remove`, to delete the item of the account being removed; it is never asked for a value.
 
-## Tests
+</details>
+
+<a id="safety-checks"></a>
+
+<details>
+<summary><b>Safety checks</b></summary>
+
+<br/>
+
+If `~/.claude-accounts` is a symbolic link, or if it and `~/.claude` overlap on disk, every command refuses to run with an explanation. Links and writes would otherwise land in the wrong place.
+
+The account's `.claude.json` is written through a temporary file with a random name, created exclusively with mode 0600, then renamed. The file is re-checked just before the rename; if it changed while merging (for example Claude just saved a login), the merge is redone once instead of overwriting the other write. This narrows the race, it does not remove it: do not run `sync` against an account while its Claude is running. `run` syncs before Claude starts, which is the safe moment, but it cannot see a second pane of the same account that is already running.
+
+If an account's `.claude.json` or `.credentials.json` is a symbolic link, `sync` and `add` refuse (and `run` only warns), because a write would land somewhere else. Before `add` creates `~/.claude-accounts`, it checks where the folder would really be, and refuses if that is inside `~/.claude`.
+
+</details>
+
+<br/>
+
+## Reference
+
+Each topic below is closed by default. Open the one you need.
+
+<a id="account-state"></a>
+
+<details>
+<summary><b>Account state, and how it is known</b></summary>
+
+<br/>
+
+Every account shows one of four states, always as text beside the color (three sections, since `in use · needs login` stays in `IN USE`):
+
+| State                  | Meaning                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `in use · N panes`     | At least one Herdr pane runs Claude in this account. Section `IN USE`.                         |
+| `in use · needs login` | The same, but the account has no login (yet). It stays in `IN USE` and has no "Continue here". |
+| `signed in`            | The account has a login and no pane uses it now.                                               |
+| `needs login`          | The account exists, has no login and no pane.                                                  |
+
+The check marks the account of the focused pane. A pane running Claude wins over the login: an account with a Claude open in it reads `in use` even if the login is still missing. The `Needs login` number counts every account without a login, in use or not.
+
+How it is known:
+
+- **Login.** On macOS, whether the generic Keychain item exists: service `Claude Code-credentials` for the default account and `Claude Code-credentials-<first 8 hex of sha256 of the config folder path, NFC>` for the others, with the user name as the item's account. The user name is `USER` (else the system's), and `claude-code-user` when it is not made of `[a-zA-Z0-9._-]`, as Claude does. If `CLAUDE_SECURESTORAGE_CONFIG_DIR` is set in the environment of `cc-accounts`, it takes the place of the folder in the hash for every account, so all of them read the same. The lookup is `security find-generic-password -s <service> -a <user>` and only its exit code is used: never `-w` or `-g`, so the secret is not even requested. A `<folder>/.credentials.json` also counts as a login, on macOS too. Elsewhere only that file counts. It is exposed as `signedIn` in `cc-accounts ls --json`. The service formula was checked against Claude Code's binary, version 2.1.330. **`signed in` only means that the item or the file exists.** It is not read, so an expired or revoked login still reads `signed in`.
+- **In use.** The mod takes every local terminal whose foreground process is a Claude and asks `cc-accounts which <pid> [<pid>...]` once for all of them. A pane counts as Claude only by the name of its executable (`fg.name` or the basename of `argv[0]`) being `claude`, or by `argv[1]` being a `cc-accounts` script followed by `run` (the wrapper). `vim ~/.claude/settings.json`, `less claude.log` and `cc-accounts ls` are not Claude.
+
+</details>
+
+<a id="demo-mode"></a>
+
+<details>
+<summary><b>Demo mode</b></summary>
+
+<br/>
+
+`cc-accounts demo on` creates the flag file `~/.claude-accounts/.demo`, and `cc-accounts demo off` removes it. While it exists, `ls` and `ls --json` list three sample accounts instead of yours, and say `"demo": true`:
+
+| Account                          | E-mail                 | State           |
+| -------------------------------- | ---------------------- | --------------- |
+| `personal` (the default account) | `personal@example.com` | signed in       |
+| `client`                         | `client@example.com`   | needs login     |
+| `work`                           | `work@example.com`     | in use, 2 panes |
+
+The mod follows the CLI: when it sees `demo: true` it also draws two sample panes of `work`, in the spaces `api-server` and `web-app`, and it ignores the real panes. Nothing real is shown, which is what you want for the screenshot in `preview.png`. In demo mode a click on a sample account or pane does nothing, `which` is not asked and no session file is read. The other commands (`add`, `sync`, `run`) still work on your real accounts.
+
+</details>
+
+<a id="the-default-accounts-name"></a>
+
+<details>
+<summary><b>The default account's name</b></summary>
+
+<br/>
+
+The implicit account is called `default`. To show another name, put it on one line in `~/.claude-accounts/.default-name`. It must match the same pattern as any account name and must not collide with an existing account folder; otherwise `default` is used. The name applies to `ls`, `which`, `run <name>` (`run default` always works too) and the mod.
+
+</details>
+
+<a id="what-sync-does-with-a-link-that-was-replaced"></a>
+
+<details>
+<summary><b>What <code>sync</code> does with a link that was replaced</b></summary>
+
+<br/>
+
+Claude can replace a link with a regular file when it writes (for example `settings.json` after `/config`). `sync` never deletes it: it renames the file to `<name>.divergent-<epoch>-<pid>-<random>`, recreates the link and says so. The name is unique per process, so parallel syncs never overwrite each other's kept content, and a link that already points to the right place is never kept as divergent. This applies to every link and history entry. What is left in `.divergent-*` is yours to review and delete.
+
+Entries of `~/.claude` that are in no list are not linked. `sync` reports them as "unclassified" so you can decide where they go in the table.
+
+</details>
+
+<a id="what-counts-as-the-accounts-own-content"></a>
+
+<details>
+<summary><b>What counts as the account's own content</b></summary>
+
+<br/>
+
+`remove` deletes the folder, so it first lists what is in it that exists nowhere else, and asks for `--yes` (and the panel for its confirmation) before it goes on. An entry of the account folder counts as its own content when it is:
+
+- a `.divergent-*` file, which `sync` moved aside (also when its name starts with a `.`);
+- an entry of the link or history table that is not the link `sync` puts there: a real file or folder (a `projects/` of its own, a `settings.json` Claude wrote), or a link that points somewhere else;
+- anything the sharing table does not know.
+
+What does not count, and goes with the folder without a word, is the private state of the table: `.credentials.json`, `.claude.json`, `sessions`, `session-env`, `statsig`, `telemetry`, `logs`, `debug`, `cache`, `backups` and the other runtime entries listed as private in `mods/cc-accounts/cli.js`, plus the hidden files `.last-cleanup` and `.DS_Store` (Finder leaves the latter in any folder it opens) and any name starting with `daemon`. A hidden entry that is not in that list (a `.secret-notes` somebody put there, say) is not known to be runtime state, so it counts as content. The one exception is `agent-memory*`, memory that agents wrote: it counts as content. Names are shown with anything that is not plain printable ASCII, a backslash or a comma written as `\u{hex}`.
+
+</details>
+
+<a id="what-remove-does"></a>
+
+<details>
+<summary><b>What <code>remove</code> does</b></summary>
+
+<br/>
+
+`cc-accounts remove <name> [--yes] [--expect-own=<name,...>]` is the one way to delete an account that leaves nothing behind. In this order:
+
+1. It refuses the default account (and the name it is shown under), an invalid name and an account that does not exist. A link in place of an account folder is not an account. It also refuses a folder that is not a plain folder directly inside the real `~/.claude-accounts`, and notes which folder it is (device and inode).
+2. It lists the account's own content (see above). With `--expect-own` it refuses unless that list is exactly the one given, in any order; `--expect-own=` means "nothing". Without `--yes` it refuses when the list is not empty. With `--yes` it goes ahead and names the content in its answer.
+3. It checks that it can delete: write access to the account folder, to every real folder inside it (links are not entered) and to the folder that holds the accounts. If one is missing it refuses before the Keychain, because the login cannot be brought back. Without `--yes` it asks for a terminal and for the account's name typed in. With no terminal it refuses, so a script has to say `--yes`.
+4. It refuses when a live process of yours has `CLAUDE_CONFIG_DIR` pointing at the folder. It reads that as `which` does, over `pgrep -u <uid> -x claude`, `pgrep -u <uid> -f "cc-accounts run"` and the children of every `cc-accounts run` wrapper of any copy of the CLI (`pgrep -P`; a wrapper that has no `claude` yet counts by the account name in its arguments, so it holds that account and no other), and also over every other process of yours whose command line says "claude" in any case (`pgrep -u <uid> -f -i claude`: `node` with or without flags, `bun`, `nodejs`, `node22`, a path with a space, `claude-code/cli.mjs`). Each of those has its `CLAUDE_CONFIG_DIR` read the same way. One that points to the account counts as running, and one whose environment cannot be read while its command line says "claude" makes the answer "cannot tell", but only when its executable can be a Claude itself (`claude`, `node`, `nodejs`, `node<version>`, `bun` or `deno`, by the name of the program or the first word of its command line). A shell, `tmux` or a binary of the system with "claude" in its command line and an environment that cannot be read is ignored, because the Claude it started is a process of its own and is read on its own; one of those whose environment can be read and points to the account still counts as running. More than 200 candidates is "cannot tell". What stays unseen is a Claude whose command line never says "claude" (a renamed copy, a launcher that loads it) and one whose environment `ps` does not show; the account then reads as free. When it cannot tell, it refuses and says why: `pgrep` fails, an environment cannot be read, a wrapper has no `claude` yet and the name in its arguments cannot be read, or a `CLAUDE_CONFIG_DIR` is relative, starts with `~`, does not exist or cannot be resolved (it is never read as "some other folder").
+5. After the name is typed, it lists the content again and refuses if it changed meanwhile.
+6. It looks at the processes again, right before the Keychain.
+7. On macOS it deletes the Keychain item with `security delete-generic-password -s <service> -a <user>`, no output kept, never with `-w` or `-g`, and waits at most 60 seconds for it. An item that is not there is not an error: `security` answers 44, the low byte of the OSStatus `errSecItemNotFound` (-25300), as checked on a Mac. The effect of a false "not found" is an orphan item left in the Keychain, never a deletion of more than this account's item. If `security` does not answer in time, it is killed, the command stops, the folder stays and the answer says the item may still be there. With `CLAUDE_SECURESTORAGE_CONFIG_DIR` set the item is shared by every account, so it is left alone and the answer says so. Any other failure stops the command and the folder stays. Elsewhere the login file goes with the folder.
+8. It checks the folder again: the accounts root is still safe, the folder is still a plain folder inside it and it is the same one (same device and inode) as at step 1. It lists the own content once more and looks at the processes once more. If the folder was swapped, the content is not the list it accepted or a Claude started, it deletes nothing and says that the Keychain step already ran and the folder was kept.
+9. It deletes the folder. The links to `~/.claude` are removed as links; their targets are never followed, and `~/.claude` stays byte for byte as it was. If the deletion fails, the login is already gone from the Keychain: the answer says so and that running `cc-accounts remove <name> --yes` again finishes the job.
+
+</details>
+
+<a id="how-which-finds-the-account"></a>
+
+<details>
+<summary><b>How <code>which</code> finds the account</b></summary>
+
+<br/>
+
+`which` never prints text that came from `ps`. It reads the process's `CLAUDE_CONFIG_DIR` (separating the environment from the arguments by comparing `ps` with and without `-E`), resolves it with `realpath` and matches it against the known account folders. If the process is a `cc-accounts run <name>` wrapper (Node has no `exec`, so the wrapper sits in front of `claude`), it is recognized by its command line resolving to this very script, and the answer is read from the environment of its `claude` child (`pgrep -P`); the name in its arguments is never used. If the environment cannot be read, the child is missing or several `CLAUDE_CONFIG_DIR=` appear in it, the answer is `unknown`, never `default`.
+
+`ps` joins the variables with plain spaces, so one case cannot be told apart: a single `CLAUDE_CONFIG_DIR` whose value contains a space followed by something that looks like another variable is read as the shorter value. The output is still only a known account name, never text from `ps`, and a process of your own user can only mislabel its own chip.
+
+A known limit of the same kind: a variable whose value contains the text, as in `AAA="x CLAUDE_CONFIG_DIR=..."`, looks to `ps` like a `CLAUDE_CONFIG_DIR` of its own. A second one makes the answer `unknown`, and if it is the only one it is read as the real one. The answer is again only a known account name or `unknown`, never the text.
+
+The wrapper check looks at the first three `run` markers of the command line and at most four starting points for each, so a very long command line costs a fixed number of lookups.
+
+</details>
+
+<a id="unverified-assumptions"></a>
+
+<details>
+<summary><b>Unverified assumptions</b></summary>
+
+<br/>
+
+Fill these in after the first login in each account. None of it has been verified against a real login yet.
+
+- [ ] **Keychain item per folder.** Logging in with `CLAUDE_CONFIG_DIR` creates its own `Claude Code-credentials-<hash>` item and leaves the default item alone. The naming formula (sha256 of the folder path as passed in `CLAUDE_CONFIG_DIR`, NFC, first 8 hex digits, item account equal to the user name, `claude-code-user` as the fallback user) was checked in Claude Code's binary, version 2.1.330, but not against a real login. If a Claude Code update renames the items, accounts read `needs login` until the formula in `mods/cc-accounts/cli.js` is fixed.
+- [ ] **The button's width.** 140 px was estimated, not measured in the app: about twelve characters of an account name fit before the ellipsis.
+- [ ] **The `settings.json` link survives.** A write by Claude (`/config`) keeps the link or replaces it with a regular file. `sync` repairs it either way, but it is worth knowing how often it happens.
+- [ ] **`CLAUDE.md` through a link.** The account's `CLAUDE.md`, being a link to `~/.claude/CLAUDE.md`, is loaded as user memory.
+- [ ] **The pane's pid.** The `foreground.pid` Herdr reports for a pane running `cc-accounts run` is the wrapper's or Claude's, and `which` answers correctly for both.
+- [ ] **The form's Enter and Esc.** That Enter reaches the box's `submit` and that Esc reaches the form's key handler while the box holds the keyboard were not seen in the app. The tests prove the handlers, not the real keyboard.
+- [ ] **The Keychain removal.** `security delete-generic-password` deleting the item a real Claude login made (including a possible macOS permission prompt) was checked only against a stand-in, never against the real Keychain. That `security` answers 44 for a missing item was checked on a Mac.
+- [ ] **`--fork-session` with `--resume`.** Present in `claude --help`; its behavior when the source session is still live has not been exercised.
+
+</details>
+
+<a id="verified-in-the-app"></a>
+
+<details>
+<summary><b>Verified in the app</b></summary>
+
+<br/>
+
+- **`task: "/login"` through the wrapper.** VERIFIED IN THE APP, 2026-11-23, by Hugo: the Create button's login tab (`tab.new` with `argv: [cc-accounts, "run", <name>]` and `task: "/login"`) delivers `/login` to Claude. The `log-in` button's tooltip still tells you to run `/login`, in case the message does not arrive.
+- **The form's focus and the name error.** VERIFIED IN THE APP, 2026-11-23, by Hugo: the name box has the keyboard when the form opens, and an invalid name shows its message.
+
+</details>
+
+<br/>
+
+## Contributing
+
+`AGENTS.md` has the rules for a person or an agent: where new code goes, the Definition of Done (the commands under "Tests" below) and the commit format. Commits follow Conventional Commits, and a hook and the CI check them.
+
+`.claude/settings.json` suggests two optional plugins (`pstack` and `mattpocock-skills`) to anyone who works on the repository with Claude Code. They are a convenience, not a requirement: nothing in the build, the tests or the CI uses them, and the repository works the same without Claude Code.
+
+<a id="tests"></a>
+
+<details>
+<summary><b>Tests</b></summary>
+
+<br/>
 
 ```sh
 pnpm install --frozen-lockfile
@@ -285,11 +549,9 @@ herdr-app check mods/cc-accounts
 
 Every process the tests start (the CLI, `install.sh`, `herdr-app check`) gets a temporary `HOME` (`herdr-app check` writes under `HOME/Library/Application Support`, and passes with an empty one). The tests only read the real process table. The mod tests that call `herdr-app` need it on `PATH` and are skipped without it. `test/model.test.mjs` tests the pure part of the mod (`mods/cc-accounts/model.js`: Claude detection, sections, the panes of each account, the click's commands, the name rule, the login tab). `test/mod-behavior.test.mjs` runs the mod's real source against recorded stand-ins for the Herdr modules (shared state included, so it can show that two copies run one read), so it needs nothing installed. `herdr-app check` cannot pass props to a mod, so the tests check copies of the mod whose `props()` returns fixed values, with accounts in the three states, which exercises the `chip`, `toggle`, `panel` (also with the add form open) and `menu` roles, and the `add` popup. The tests of `place-layout` run on small layout files in `test/fixtures/` and on `install.sh` with throwaway folders. Every CLI test puts a stand-in `security` and a stand-in `pgrep` first on `PATH`, so the real Keychain is never asked and `remove` never reads the environment of your real Claude processes.
 
-## Contributing
+</details>
 
-`AGENTS.md` has the rules for a person or an agent: where new code goes, the Definition of Done (the commands under "Tests" above) and the commit format. Commits follow Conventional Commits, and a hook and the CI check them.
-
-`.claude/settings.json` suggests two optional plugins (`pstack` and `mattpocock-skills`) to anyone who works on the repository with Claude Code. They are a convenience, not a requirement: nothing in the build, the tests or the CI uses them, and the repository works the same without Claude Code.
+<br/>
 
 ## Uninstall
 
@@ -316,28 +578,18 @@ Then:
 
 `~/.claude` is never changed, so the default account stays as it was.
 
-## Unverified assumptions
-
-Fill these in after the first login in each account. None of it has been verified against a real login yet.
-
-- [ ] **Keychain item per folder.** Logging in with `CLAUDE_CONFIG_DIR` creates its own `Claude Code-credentials-<hash>` item and leaves the default item alone. The naming formula (sha256 of the folder path as passed in `CLAUDE_CONFIG_DIR`, NFC, first 8 hex digits, item account equal to the user name, `claude-code-user` as the fallback user) was checked in Claude Code's binary, version 2.1.330, but not against a real login. If a Claude Code update renames the items, accounts read `needs login` until the formula in `mods/cc-accounts/cli.js` is fixed.
-- [ ] **The button's width.** 140 px was estimated, not measured in the app: about twelve characters of an account name fit before the ellipsis.
-- [ ] **The `settings.json` link survives.** A write by Claude (`/config`) keeps the link or replaces it with a regular file. `sync` repairs it either way, but it is worth knowing how often it happens.
-- [ ] **`CLAUDE.md` through a link.** The account's `CLAUDE.md`, being a link to `~/.claude/CLAUDE.md`, is loaded as user memory.
-- [ ] **The pane's pid.** The `foreground.pid` Herdr reports for a pane running `cc-accounts run` is the wrapper's or Claude's, and `which` answers correctly for both.
-- [ ] **The form's Enter and Esc.** That Enter reaches the box's `submit` and that Esc reaches the form's key handler while the box holds the keyboard were not seen in the app. The tests prove the handlers, not the real keyboard.
-- [ ] **The Keychain removal.** `security delete-generic-password` deleting the item a real Claude login made (including a possible macOS permission prompt) was checked only against a stand-in, never against the real Keychain. That `security` answers 44 for a missing item was checked on a Mac.
-- [ ] **`--fork-session` with `--resume`.** Present in `claude --help`; its behavior when the source session is still live has not been exercised.
-
-## Verified in the app
-
-- **`task: "/login"` through the wrapper.** VERIFIED IN THE APP, 2026-11-23, by Hugo: the Create button's login tab (`tab.new` with `argv: [cc-accounts, "run", <name>]` and `task: "/login"`) delivers `/login` to Claude. The `log-in` button's tooltip still tells you to run `/login`, in case the message does not arrive.
-- **The form's focus and the name error.** VERIFIED IN THE APP, 2026-11-23, by Hugo: the name box has the keyboard when the form opens, and an invalid name shows its message.
+<br/>
 
 ## License
 
-MIT, see `LICENSE`.
+MIT, see [`LICENSE`](LICENSE).
 
 ## Credits
 
-The per-folder credential naming and the list of runtime state come from reading [Orca](https://github.com/stablyai/orca)'s `claude-accounts` code. The way of finding the focused pane's pid and splitting a pane with an environment comes from the herdr-claude-accounts mod (MIT). Everything here is rewritten.
+The per-folder credential naming and the list of runtime state come from reading [Orca](https://github.com/stablyai/orca)'s `claude-accounts` code. The way of finding the focused pane's pid and splitting a pane with an environment comes from [herdr-claude-accounts](https://github.com/lcalmsky/herdr-claude-accounts) by lcalmsky (MIT). Everything here is rewritten.
+
+<br/>
+
+<div align="center">
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:79B9A5,100:17463F&height=110&section=footer" width="100%" alt="" />
+</div>
