@@ -154,7 +154,6 @@ describe("mod", { skip: !hasHerdr && "herdr-app is not installed" }, () => {
       "cli.js",
       "cc-accounts",
       "mod.json",
-      "RECIPE.md",
       ...["users", "plus", "fork", "log-in", "info", "close", "check", "chevron-right", "chevron-down", "trash"].map(
         (n) => `icons/${n}.svg`,
       ),

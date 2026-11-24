@@ -130,7 +130,8 @@ Install the hooks once per clone with `pnpm install`: the `prepare` script runs 
 `cc-accounts` runs several Claude Code accounts at the same time on one machine. Each account is a folder with its own `CLAUDE_CONFIG_DIR` under `~/.claude-accounts/`, and the Herdr mod shows which account each pane uses. [`docs/adr/0001-one-claude-config-dir-per-account.md`](docs/adr/0001-one-claude-config-dir-per-account.md) records the decision behind it. The README explains what it does and how.
 
 ```text
-mods/cc-accounts/   what the Herdr gallery copies: main.js, model.js, mod.json, icons/, RECIPE.md,
+RECIPE.md           the brief the Herdr gallery lists the mod with, next to preview.png
+mods/cc-accounts/   what the Herdr gallery copies: main.js, model.js, mod.json, icons/,
                     and the CLI (cc-accounts, the entry point, and cli.js)
 keys.json           the key the mod expects, merged into the user's keys.json
 install.sh          copies the mod folder, links the CLI, binds the key

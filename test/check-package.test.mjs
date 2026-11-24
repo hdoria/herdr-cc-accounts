@@ -16,7 +16,7 @@ let n = 0;
 function copy() {
   const dir = join(root, `repo${n++}`);
   cpSync(join(REPO, "mods", "cc-accounts"), join(dir, "mods", "cc-accounts"), { recursive: true });
-  cpSync(join(REPO, "keys.json"), join(dir, "keys.json"));
+  for (const file of ["keys.json", "RECIPE.md", "preview.png"]) cpSync(join(REPO, file), join(dir, file));
   return dir;
 }
 
@@ -35,10 +35,12 @@ describe("check-package", () => {
   test("a missing file is named", () => {
     const dir = copy();
     rmSync(join(dir, "mods", "cc-accounts", "cli.js"));
-    rmSync(join(dir, "mods", "cc-accounts", "RECIPE.md"));
+    rmSync(join(dir, "RECIPE.md"));
+    rmSync(join(dir, "preview.png"));
     const found = problems(dir);
     assert.ok(found.includes("mods/cc-accounts/cli.js is missing"), found.join("\n"));
-    assert.ok(found.includes("mods/cc-accounts/RECIPE.md is missing"), found.join("\n"));
+    assert.ok(found.includes("RECIPE.md is missing"), found.join("\n"));
+    assert.ok(found.includes("preview.png is missing"), found.join("\n"));
   });
 
   test("a CLI that is not executable or has no shebang is refused", () => {
@@ -71,7 +73,7 @@ describe("check-package", () => {
 
   test("a recipe with a section missing or out of order is refused", () => {
     const dir = copy();
-    edit(join(dir, "mods", "cc-accounts", "RECIPE.md"), (text) =>
+    edit(join(dir, "RECIPE.md"), (text) =>
       text
         .replace("**Watch out:**", "**Careful:**")
         .replace("**How it behaves:**", "**How it behaves:** **Done when:**"),

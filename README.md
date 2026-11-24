@@ -2,7 +2,7 @@
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg) ![Node 22 or newer](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)
 
-![The cc-accounts panel in Herdr](mods/cc-accounts/preview.png)
+![The cc-accounts panel in Herdr](preview.png)
 
 Claude Code accounts side by side in Herdr.app. Each pane opens already in the account you choose, accounts run at the same time, and a button in the tab bar opens a side panel that shows which account the focused pane uses, which accounts are in use, which panes use each one and which accounts need a login.
 
@@ -195,7 +195,7 @@ The popup has the same rows and sections as the panel, without the numbers strip
 | `client`                         | `client@example.com`   | needs login     |
 | `work`                           | `work@example.com`     | in use, 2 panes |
 
-The mod follows the CLI: when it sees `demo: true` it also draws two sample panes of `work`, in the spaces `api-server` and `web-app`, and it ignores the real panes. Nothing real is shown, which is what you want for the screenshot in `mods/cc-accounts/preview.png`. In demo mode a click on a sample account or pane does nothing, `which` is not asked and no session file is read. The other commands (`add`, `sync`, `run`) still work on your real accounts.
+The mod follows the CLI: when it sees `demo: true` it also draws two sample panes of `work`, in the spaces `api-server` and `web-app`, and it ignores the real panes. Nothing real is shown, which is what you want for the screenshot in `preview.png`. In demo mode a click on a sample account or pane does nothing, `which` is not asked and no session file is read. The other commands (`add`, `sync`, `run`) still work on your real accounts.
 
 ### The default account's name
 

@@ -76,7 +76,7 @@ A pane counts as Claude when its foreground process is named `claude`, or when i
 - The button's 140 px was estimated: about twelve characters of a name fit before the ellipsis.
 - A pane on another machine is not listed, and the account of a Claude that runs there is not known.
 - Herdr's own layouts (`main`, `terminals`, `win98`) are replaced on every start, so put the two layout nodes in a layout of your own.
-- Herdr writes `jsconfig.json` and `gpui-kit.d.ts` into this folder when it loads the mod. They are not part of it.
+- Herdr writes `jsconfig.json` and `gpui-kit.d.ts` into `mods/cc-accounts/` when it loads the mod. They are not part of it.
 
 **Done when:**
 

@@ -2,7 +2,8 @@
 // The build of this repository. Herdr loads the mod's JavaScript as it is, so there is nothing to compile; what
 // can go wrong is the folder the gallery copies (mods/cc-accounts/) not working on its own. This checks that it
 // does: the files an install needs are there, the CLI is executable, no module reaches outside the folder, no icon
-// is orphaned and the RECIPE.md has the sections the gallery asks for, in order.
+// is orphaned, and the repository root has the RECIPE.md (with the sections the gallery asks for, in order) and the
+// preview.png the gallery lists the mod with.
 // usage: check-package.mjs [<repo root>]
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -10,7 +11,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const MOD_NAME = "cc-accounts";
-const REQUIRED = ["main.js", "model.js", "cli.js", "cc-accounts", "mod.json", "RECIPE.md"];
+const REQUIRED = ["main.js", "model.js", "cli.js", "cc-accounts", "mod.json"];
+const GALLERY = ["RECIPE.md", "preview.png"];
 const RECIPE_SECTIONS = ["What you see", "How it behaves", "Built from", "Watch out", "Done when"];
 const MODULES = ["main.js", "model.js", "cli.js"];
 
@@ -75,7 +77,11 @@ export function problems(root) {
     found.push("mod.json is not valid JSON");
   }
 
-  const recipe = read(join(mod, "RECIPE.md")) ?? "";
+  for (const file of GALLERY) {
+    if (read(join(root, file)) === null) found.push(`${file} is missing`);
+  }
+
+  const recipe = read(join(root, "RECIPE.md")) ?? "";
   let from = 0;
   for (const section of RECIPE_SECTIONS) {
     const at = recipe.indexOf(`**${section}`, from);
