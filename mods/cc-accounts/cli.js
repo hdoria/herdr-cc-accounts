@@ -1030,6 +1030,21 @@ function pgrepPids(args) {
 // "claude" at all (a renamed copy, a launcher that loads it) and one whose environment `ps` does not show.
 const CLAUDE_CANDIDATE = "claude";
 const CLAUDE_WORD = /claude/i;
+// The executables a Claude can be: its own binary, or the runtime that loads it. Any other program (a shell, tmux,
+// a binary of the system) that has "claude" in its command line only launched one, and that one is a process of
+// its own, read on its own. So a program like that with an environment that cannot be read is not "unknown".
+const CLAUDE_EXECUTABLE = /^(?:claude|node(?:js)?(?:\d[\d.]*)?|bun|deno)$/i;
+
+// Whether the process runs as an executable that can be a Claude: the name of the program as the system keeps it,
+// or the first word of its command line, without its folder.
+/**
+ * @param {string} pid
+ * @param {string} line
+ */
+function mayBeClaude(pid, line) {
+  const names = [psLine(["-ww", "-o", "comm=", "-p", pid]), line.trim().split(/\s/)[0]];
+  return names.some((name) => name !== null && CLAUDE_EXECUTABLE.test(basename(name)));
+}
 
 // Whether a live process of this user runs in the account folder, read as `which` reads it: the environment of
 // every process whose name or command line says "claude" and of the children of every `cc-accounts run` wrapper.
@@ -1047,7 +1062,8 @@ function accountUse(real) {
     return { state: "unknown", why: "the running processes could not be listed" };
   if (candidates.length > MAX_PROCESSES) return { state: "unknown", why: "too many candidate processes to check" };
   // A process that is a Claude by name or by being a wrapper's child is never "free" when its environment is
-  // unreadable. A candidate found only by its command line is the same when that line says "claude".
+  // unreadable. A candidate found only by its command line is the same when that line says "claude" and the
+  // executable can be a Claude (see CLAUDE_EXECUTABLE).
   const certain = new Set(claudes);
   for (const pid of wrappers) {
     const line = psLine(["-ww", "-o", "command=", "-p", pid]);
@@ -1069,14 +1085,14 @@ function accountUse(real) {
   for (const pid of pids) {
     const line = psLine(["-ww", "-o", "command=", "-p", pid]);
     if (line === null || line.trim() === "") continue;
-    const unreadable = certain.has(pid) || CLAUDE_WORD.test(line);
     const dir = configDirOf(pid, line);
-    if (dir === null) blind ||= unreadable;
+    const unreadable = () => certain.has(pid) || (CLAUDE_WORD.test(line) && mayBeClaude(pid, line));
+    if (dir === null) blind ||= unreadable();
     else if (dir !== "") {
       // A value that is relative, starts with "~" or does not resolve says where Claude looks only to the shell
       // that wrote it, so it is never "free".
       const where = isAbsolute(dir) ? realpathOrNull(dir) : null;
-      if (where === null) blind ||= unreadable;
+      if (where === null) blind ||= unreadable();
       else if (where === real) return { state: "busy" };
     }
   }

@@ -1992,6 +1992,32 @@ describe("remove", () => {
     assert.equal(r.code, 0, r.err);
   });
 
+  for (const name of ["zsh", "tmux", "chrome-native-host"]) {
+    test(`a ${name} with claude in its command line and an unreadable environment does not block`, async () => {
+      const t = setup();
+      const child = await running(t, {
+        interpreter: interpreterNamed(t, name),
+        args: [fixture(t, "launcher", "claude")],
+        env: { CLAUDE_CONFIG_DIR: "relative/dir" },
+      });
+      const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
+      assert.equal(r.code, 0, r.err);
+      child.kill();
+    });
+  }
+
+  test("a shell whose environment is readable and points to the account still holds it", async () => {
+    const t = setup();
+    const child = await running(t, {
+      interpreter: interpreterNamed(t, "zsh"),
+      args: [fixture(t, "launcher", "claude")],
+      env: { CLAUDE_CONFIG_DIR: t.dir },
+    });
+    const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
+    refused(r, /account "work" is in use by a running Claude; close it first/);
+    child.kill();
+  });
+
   test("a candidate of the claude search that points to the account holds it, whatever its command line says", async () => {
     const t = setup();
     const child = await idle({ PATH: process.env.PATH, HOME: t.home, CLAUDE_CONFIG_DIR: t.dir });
