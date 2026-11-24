@@ -140,7 +140,8 @@ exit 44
 // CC_STUB_PGREP_FAIL makes both fail. Every other call, such as -P <pid>, goes to the real pgrep.
 // CC_STUB_COUNT names a file that counts the \`-x claude\` calls: from the call number CC_STUB_COUNT_AFTER (the
 // second by default) on, the answer is CC_STUB_CLAUDE_PIDS_LATER, which is how a test starts a Claude after the
-// first look and before the delete. The search for a Claude that runs under node answers CC_STUB_NODE_PIDS.
+// first look and before the delete. The search for any process whose command line says "claude", the one that finds
+// a Claude under node, bun or anything else, answers CC_STUB_NODE_PIDS; any other -f pattern finds nothing.
 const PGREP_STUB = `#!/bin/sh
 case " $* " in
   *" -x claude "*)
@@ -150,8 +151,9 @@ case " $* " in
       echo $((n + 1)) > "$CC_STUB_COUNT"
       [ "$n" -ge "\${CC_STUB_COUNT_AFTER:-1}" ] && list="$CC_STUB_CLAUDE_PIDS_LATER"
     fi ;;
-  *claude-code*) list="$CC_STUB_NODE_PIDS" ;;
-  *" -f "*) list="$CC_STUB_WRAPPER_PIDS" ;;
+  *"cc-accounts run"*) list="$CC_STUB_WRAPPER_PIDS" ;;
+  *" -f -i claude "*) list="$CC_STUB_NODE_PIDS" ;;
+  *" -f "*) list="" ;;
   *) exec /usr/bin/pgrep "$@" ;;
 esac
 [ -n "$CC_STUB_PGREP_FAIL" ] && exit 3
@@ -291,6 +293,19 @@ describe("add and sync", () => {
     const r = cc(home, ["add", "work"]);
     assert.throws(() => lstatSync(join(home, ".claude-accounts", "work", "something-new.json")));
     assert.match(r.out, /unclassified.*something-new\.json/);
+  });
+
+  test("a .DS_Store in ~/.claude is private: not linked and not reported as unclassified", () => {
+    const home = newHome({ extras: [".DS_Store"] });
+    for (const args of [
+      ["add", "work"],
+      ["sync", "work"],
+    ]) {
+      const r = cc(home, args);
+      assert.equal(r.code, 0, r.err);
+      assert.doesNotMatch(r.out + r.err, /unclassified|DS_Store/);
+    }
+    assert.throws(() => lstatSync(join(home, ".claude-accounts", "work", ".DS_Store")));
   });
 
   test("the fake ~/.claude and ~/.claude.json stay byte-for-byte identical", () => {
@@ -1735,6 +1750,16 @@ describe("remove", () => {
     assert.equal(t.run(["remove", "work", "--yes"]).code, 0);
   });
 
+  test("a .DS_Store that Finder left in the account is not content of its own and asks nothing", () => {
+    const t = setup();
+    writeFileSync(join(t.dir, ".DS_Store"), "finder\n");
+    assert.deepEqual(ownOf(t), []);
+    const r = t.run(["remove", "work", "--yes", "--expect-own="]);
+    assert.equal(r.code, 0, r.err);
+    assert.doesNotMatch(r.out, /DS_Store/);
+    assert.equal(existsSync(t.dir), false);
+  });
+
   test("own content is listed by a printable name, one that cannot split the list or reach the terminal raw", () => {
     const dir = join(root, `own${counter++}`);
     mkdirSync(dir);
@@ -1845,53 +1870,119 @@ describe("remove", () => {
     },
   );
 
-  test("a Claude that runs under node, as an npm install does, counts as a running Claude", async () => {
-    const t = setup();
-    const script = join(t.home, "npm", "bin", "claude");
-    mkdirSync(dirname(script), { recursive: true });
-    writeFileSync(script, "setTimeout(() => {}, 60000);\n");
+  // A real process: `exec` runs `interpreter args...` with exactly `env` as its environment.
+  async function running(t, { interpreter = process.execPath, args, env }) {
+    const assignments = Object.entries(env).map(([key, value]) => `${key}=${value}`);
     const child = spawn(
       "/usr/bin/env",
-      ["-i", `PATH=${process.env.PATH}`, `HOME=${t.home}`, `CLAUDE_CONFIG_DIR=${t.dir}`, process.execPath, script],
-      { stdio: "ignore" },
+      ["-i", `PATH=${process.env.PATH}`, `HOME=${t.home}`, ...assignments, interpreter, ...args],
+      {
+        stdio: "ignore",
+      },
     );
     alive.push(child);
+    const marker = args.at(-1);
     for (let i = 0; i < 100; i++) {
       const r = spawnSync("ps", ["-ww", "-o", "command=", "-p", String(child.pid)], { encoding: "utf8" });
-      if (r.stdout.includes(script)) break;
+      if (r.stdout.includes(marker)) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
-    refused(r, /account "work" is in use by a running Claude; close it first/);
-    assert.equal(existsSync(t.dir), true);
-    assert.deepEqual(t.calls(), []);
-  });
+    return child;
+  }
 
-  test("a node process that is not Claude does not hold an account", async () => {
+  // A script that waits, and a name for node, under a folder of the home.
+  function fixture(t, ...segments) {
+    const script = join(t.home, ...segments);
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(script, "setTimeout(() => {}, 60000);\n");
+    return script;
+  }
+  function interpreterNamed(t, name) {
+    const file = join(t.home, "interpreters", name);
+    mkdirSync(dirname(file), { recursive: true });
+    symlinkSync(process.execPath, file);
+    return file;
+  }
+
+  const FORMS = [
+    ["node with the script", (t) => ({ args: [fixture(t, "npm", "bin", "claude")] })],
+    [
+      "node -r with a hook",
+      (t) => {
+        const hook = fixture(t, "hooks", "hook.js");
+        return { args: ["-r", hook, fixture(t, "npm", "bin", "claude")] };
+      },
+    ],
+    [
+      "node --import",
+      (t) => {
+        const hook = fixture(t, "hooks", "x.mjs");
+        return { args: ["--import", hook, fixture(t, "npm", "bin", "claude")] };
+      },
+    ],
+    ["bun", (t) => ({ interpreter: interpreterNamed(t, "bun"), args: [fixture(t, "bun", "bin", "claude")] })],
+    ["nodejs", (t) => ({ interpreter: interpreterNamed(t, "nodejs"), args: [fixture(t, "npm", "bin", "claude")] })],
+    ["node22", (t) => ({ interpreter: interpreterNamed(t, "node22"), args: [fixture(t, "npm", "bin", "claude")] })],
+    ["a path with a space", (t) => ({ args: [fixture(t, "my npm", "bin", "claude")] })],
+    ["cli.mjs of claude-code", (t) => ({ args: [fixture(t, "lib", "claude-code", "cli.mjs")] })],
+  ];
+
+  for (const [form, build] of FORMS) {
+    test(`a Claude started as "${form}" holds its account, and the command line is not echoed`, async () => {
+      const t = setup();
+      const spec = build(t);
+      const child = await running(t, { ...spec, env: { CLAUDE_CONFIG_DIR: t.dir } });
+      const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
+      refused(r, /^cc-accounts: account "work" is in use by a running Claude; close it first\n$/);
+      assert.equal(existsSync(t.dir), true);
+      assert.deepEqual(t.calls(), []);
+      child.kill();
+    });
+
+    test(`a Claude started as "${form}" in another account does not hold this one`, async () => {
+      const t = setup();
+      const other = join(t.home, ".claude-accounts", "other");
+      mkdirSync(other, { recursive: true });
+      const child = await running(t, { ...build(t), env: { CLAUDE_CONFIG_DIR: other } });
+      const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
+      assert.equal(r.code, 0, r.err);
+      child.kill();
+    });
+
+    test(`a Claude started as "${form}" whose environment cannot be read is never free`, async () => {
+      const t = setup();
+      const child = await running(t, { ...build(t), env: { CLAUDE_CONFIG_DIR: "relative/dir" } });
+      const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
+      refused(
+        r,
+        /cannot tell whether account "work" is in use \(the environment of a claude process could not be read\)/,
+      );
+      assert.equal(existsSync(t.dir), true);
+      assert.doesNotMatch(r.err, /relative|claude\/|npm/);
+      child.kill();
+    });
+  }
+
+  test("a process whose command line never says claude, with an unreadable environment, is not blamed", async () => {
     const t = setup();
-    const child = await idle({ PATH: process.env.PATH, HOME: t.home, CLAUDE_CONFIG_DIR: t.dir });
+    const child = await idle({ PATH: process.env.PATH, HOME: t.home, CLAUDE_CONFIG_DIR: "relative/dir" });
     const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
     assert.equal(r.code, 0, r.err);
   });
 
-  test("isNodeClaude reads the command line of an npm install and nothing else", () => {
-    for (const line of [
-      "node /usr/local/bin/claude",
-      "/opt/node/bin/node /opt/node/bin/claude --resume",
-      "node --no-warnings /x/lib/node_modules/@anthropic-ai/claude-code/cli.js",
-    ]) {
-      assert.equal(cli.isNodeClaude(line), true, line);
-    }
-    for (const line of [
-      "node /x/server.js claude",
-      "node /x/cc-accounts run work claude",
-      "vim /tmp/claude",
-      "claude --resume",
-      "node /x/claude-helper.js",
-      "node",
-    ]) {
-      assert.equal(cli.isNodeClaude(line), false, line);
-    }
+  test("a candidate of the claude search that points to the account holds it, whatever its command line says", async () => {
+    const t = setup();
+    const child = await idle({ PATH: process.env.PATH, HOME: t.home, CLAUDE_CONFIG_DIR: t.dir });
+    const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
+    refused(r, /account "work" is in use by a running Claude; close it first/);
+  });
+
+  test("more candidates than the limit is unknown, never free", () => {
+    const t = setup();
+    const pids = Array.from({ length: 201 }, (_, i) => i + 1).join(" ");
+    const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: pids });
+    refused(r, /cannot tell whether account "work" is in use \(too many candidate processes to check\)/);
+    assert.equal(existsSync(t.dir), true);
   });
 
   test("a CLAUDE_CONFIG_DIR that does not resolve to a folder is never read as free", async () => {

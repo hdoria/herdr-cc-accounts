@@ -49,6 +49,7 @@ const SHARING = Object.freeze({
       ".credentials.json",
       ".claude.json",
       ".last-cleanup",
+      ".DS_Store",
       "sessions",
       "session-env",
       "statsig",
@@ -1003,18 +1004,18 @@ function pgrepPids(args) {
   return r.status === 1 ? [] : r.stdout.split("\n").filter((line) => /^\d+$/.test(line));
 }
 
-// An install through npm runs as `node <prefix>/bin/claude` or `node .../claude-code/cli.js`, so its process is
-// called `node`, not `claude`. `pgrep -f` finds the candidates and the command line decides. A script path with a
-// space in it is not recognized.
-const NODE_CLAUDE_CANDIDATE = "claude( |$)|claude-code/cli\\.js";
-const NODE_CLAUDE = /^(\S*\/)?node(\.exe)?\s+(-\S+\s+)*\S*(\/claude|claude-code\/cli\.js)(\s|$)/;
-
-/** @param {string} line the command line of a process */
-export const isNodeClaude = (line) => NODE_CLAUDE.test(line.trim());
+// A Claude does not have to be called `claude`: an npm install runs as `node <prefix>/bin/claude`, and `node -r`,
+// `bun`, `nodejs`, `node22`, a path with a space or `cli.mjs` change what the command line looks like. So no form is
+// recognized. `pgrep -f -i claude` takes every process of this user whose command line has the word in any case,
+// and each one is read like the rest: its environment says whether it holds the account. Taking in a process too
+// many can only turn "free" into "in use" or "unknown". What stays unseen is a Claude whose command line never says
+// "claude" at all (a renamed copy, a launcher that loads it) and one whose environment `ps` does not show.
+const CLAUDE_CANDIDATE = "claude";
+const CLAUDE_WORD = /claude/i;
 
 // Whether a live process of this user runs in the account folder, read as `which` reads it: the environment of
-// every `claude` process and of the children of every `cc-accounts run` wrapper. Whatever cannot be read is
-// "unknown", never "free".
+// every process whose name or command line says "claude" and of the children of every `cc-accounts run` wrapper.
+// Whatever cannot be read is "unknown", never "free".
 /**
  * @param {string} real
  * @returns {{ state: "free" | "busy" } | { state: "unknown", why: string }}
@@ -1023,15 +1024,13 @@ function accountUse(real) {
   const owner = process.getuid ? ["-u", String(process.getuid())] : [];
   const claudes = pgrepPids([...owner, "-x", "claude"]);
   const wrappers = pgrepPids([...owner, "-f", "cc-accounts run"]);
-  const scripts = pgrepPids([...owner, "-f", NODE_CLAUDE_CANDIDATE]);
-  if (claudes === null || wrappers === null || scripts === null)
+  const candidates = pgrepPids([...owner, "-f", "-i", CLAUDE_CANDIDATE]);
+  if (claudes === null || wrappers === null || candidates === null)
     return { state: "unknown", why: "the running processes could not be listed" };
-  if (scripts.length > MAX_PROCESSES) return { state: "unknown", why: "too many candidate processes to check" };
-  const pids = new Set(claudes);
-  for (const pid of scripts) {
-    const line = psLine(["-ww", "-o", "command=", "-p", pid]);
-    if (line !== null && isNodeClaude(line)) pids.add(pid);
-  }
+  if (candidates.length > MAX_PROCESSES) return { state: "unknown", why: "too many candidate processes to check" };
+  // A process that is a Claude by name or by being a wrapper's child is never "free" when its environment is
+  // unreadable. A candidate found only by its command line is the same when that line says "claude".
+  const certain = new Set(claudes);
   for (const pid of wrappers) {
     const line = psLine(["-ww", "-o", "command=", "-p", pid]);
     if (line === null) continue;
@@ -1042,20 +1041,22 @@ function accountUse(real) {
     const children = pgrepPids(["-P", pid]);
     if (children === null || children.length === 0)
       return { state: "unknown", why: 'a "cc-accounts run" wrapper has no claude to read yet' };
-    for (const child of children) pids.add(child);
+    for (const child of children) certain.add(child);
   }
+  const pids = new Set([...certain, ...candidates]);
   if (pids.size > MAX_PROCESSES) return { state: "unknown", why: "too many claude processes to check" };
   let blind = false;
   for (const pid of pids) {
     const line = psLine(["-ww", "-o", "command=", "-p", pid]);
     if (line === null || line.trim() === "") continue;
+    const unreadable = certain.has(pid) || CLAUDE_WORD.test(line);
     const dir = configDirOf(pid, line);
-    if (dir === null) blind = true;
+    if (dir === null) blind ||= unreadable;
     else if (dir !== "") {
       // A value that is relative, starts with "~" or does not resolve says where Claude looks only to the shell
       // that wrote it, so it is never "free".
       const where = isAbsolute(dir) ? realpathOrNull(dir) : null;
-      if (where === null) blind = true;
+      if (where === null) blind ||= unreadable;
       else if (where === real) return { state: "busy" };
     }
   }
