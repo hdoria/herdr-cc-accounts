@@ -105,7 +105,9 @@ let stubBin;
 // delete-generic-password removes the service from that file (44 when it is not there), and exits with
 // CC_STUB_DELETE_FAIL instead when that is set. CC_STUB_WATCH names a folder: whether it still exists at the
 // moment of a delete is written to the log, which is how a test sees the order of Keychain and folder.
-// CC_STUB_DELETE_HANG names a file that receives the stub's pid, after which the stub sleeps instead of answering.
+// CC_STUB_DELETE_HANG names a file that receives the stub's pid, after which the stub waits forever instead of
+// answering, so only a kill ends it. CC_STUB_DELETE_WRITE and CC_STUB_DELETE_MKDIR name a file and a folder the stub
+// creates while it deletes, as a program that writes into the account would, and the stub still exits 0.
 const SECURITY_STUB = `#!/bin/sh
 [ -n "$CC_STUB_LOG" ] && printf '%s\\n' "$*" >> "$CC_STUB_LOG"
 command="$1"
@@ -119,7 +121,9 @@ if [ "$command" = "delete-generic-password" ]; then
     if [ -e "$CC_STUB_WATCH" ]; then echo "folder present at delete" >> "$CC_STUB_LOG"; else echo "folder gone at delete" >> "$CC_STUB_LOG"; fi
   fi
   [ -n "$CC_STUB_DELETE_FAIL" ] && exit "$CC_STUB_DELETE_FAIL"
-  if [ -n "$CC_STUB_DELETE_HANG" ]; then echo $$ > "$CC_STUB_DELETE_HANG"; exec sleep 30; fi
+  if [ -n "$CC_STUB_DELETE_HANG" ]; then echo $$ > "$CC_STUB_DELETE_HANG"; exec tail -f /dev/null; fi
+  [ -n "$CC_STUB_DELETE_WRITE" ] && echo late > "$CC_STUB_DELETE_WRITE"
+  [ -n "$CC_STUB_DELETE_MKDIR" ] && mkdir -p "$CC_STUB_DELETE_MKDIR"
   if [ -n "$CC_STUB_KEYCHAIN" ] && grep -qxF -- "$service" "$CC_STUB_KEYCHAIN"; then
     grep -vxF -- "$service" "$CC_STUB_KEYCHAIN" > "$CC_STUB_KEYCHAIN.tmp"
     mv "$CC_STUB_KEYCHAIN.tmp" "$CC_STUB_KEYCHAIN"
@@ -134,8 +138,9 @@ exit 44
 // A stand-in for `pgrep`, so that \`remove\` never reads the environment of the real Claude processes of whoever runs
 // the tests. The lists it answers come from CC_STUB_CLAUDE_PIDS (for -x claude) and CC_STUB_WRAPPER_PIDS (for -f);
 // CC_STUB_PGREP_FAIL makes both fail. Every other call, such as -P <pid>, goes to the real pgrep.
-// CC_STUB_COUNT names a file that counts the \`-x claude\` calls: from the second on, the answer is
-// CC_STUB_CLAUDE_PIDS_LATER, which is how a test starts a Claude after the first look and before the delete.
+// CC_STUB_COUNT names a file that counts the \`-x claude\` calls: from the call number CC_STUB_COUNT_AFTER (the
+// second by default) on, the answer is CC_STUB_CLAUDE_PIDS_LATER, which is how a test starts a Claude after the
+// first look and before the delete. The search for a Claude that runs under node answers CC_STUB_NODE_PIDS.
 const PGREP_STUB = `#!/bin/sh
 case " $* " in
   *" -x claude "*)
@@ -143,8 +148,9 @@ case " $* " in
     if [ -n "$CC_STUB_COUNT" ]; then
       n=$(cat "$CC_STUB_COUNT" 2>/dev/null || echo 0)
       echo $((n + 1)) > "$CC_STUB_COUNT"
-      [ "$n" -ge 1 ] && list="$CC_STUB_CLAUDE_PIDS_LATER"
+      [ "$n" -ge "\${CC_STUB_COUNT_AFTER:-1}" ] && list="$CC_STUB_CLAUDE_PIDS_LATER"
     fi ;;
+  *claude-code*) list="$CC_STUB_NODE_PIDS" ;;
   *" -f "*) list="$CC_STUB_WRAPPER_PIDS" ;;
   *) exec /usr/bin/pgrep "$@" ;;
 esac
@@ -682,6 +688,51 @@ describe("ls", () => {
       { name: "work", dir: join(home, ".claude-accounts", "work"), email: null, signedIn: false, divergent: [] },
     ]);
     assert.match(cc(home, ["ls"]).out, /personal\s+me@example\.com\s+not signed in/);
+  });
+
+  test(
+    "a folder that cannot be looked into is one unknown account, not an error for all of them",
+    {
+      skip: process.getuid?.() === 0 && "root can look into anything",
+    },
+    () => {
+      const home = newHome();
+      cc(home, ["add", "locked"]);
+      cc(home, ["add", "open"]);
+      writeFileSync(
+        join(home, ".claude-accounts", "open", ".claude.json"),
+        JSON.stringify({ oauthAccount: { emailAddress: "open@example.com" } }),
+      );
+      const locked = join(home, ".claude-accounts", "locked");
+      chmodSync(locked, 0o000);
+      try {
+        const r = cc(home, ["ls", "--json"]);
+        assert.equal(r.code, 0, r.err);
+        assert.deepEqual(
+          lsAccounts(r.out).map((a) => [a.name, a.email, a.divergent]),
+          [
+            ["default", "main@example.com", []],
+            ["locked", null, []],
+            ["open", "open@example.com", []],
+          ],
+        );
+        assert.equal(cc(home, ["ls"]).code, 0);
+      } finally {
+        chmodSync(locked, 0o700);
+      }
+    },
+  );
+
+  test("a .claude.json that is a link is not read: its target's email is not the account's", () => {
+    const home = newHome();
+    cc(home, ["add", "work"]);
+    const target = join(home, "elsewhere.json");
+    writeFileSync(target, JSON.stringify({ oauthAccount: { emailAddress: "other@example.com" } }));
+    const state = join(home, ".claude-accounts", "work", ".claude.json");
+    rmSync(state, { force: true });
+    symlinkSync(target, state);
+    assert.equal(lsAccounts(cc(home, ["ls", "--json"]).out).find((a) => a.name === "work").email, null);
+    assert.doesNotMatch(cc(home, ["ls"]).out, /other@example\.com/);
   });
 });
 
@@ -1691,6 +1742,158 @@ describe("remove", () => {
     assert.deepEqual(cli.ownContent(dir), ["a\\u{2c}b", "back\\u{5c}slash", "caf\\u{e9}", "x\\u{a}y"]);
   });
 
+  test("a hidden entry Claude Code is not known to write is the account's own content", () => {
+    const t = setup();
+    writeFileSync(join(t.dir, ".secret-notes"), "mine\n");
+    writeFileSync(join(t.dir, ".claude.json.divergent-1-2-abcdef"), "{}\n");
+    assert.deepEqual(ownOf(t), [".claude.json.divergent-1-2-abcdef", ".secret-notes"]);
+    const r = t.run(["remove", "work"]);
+    refused(r, /holds content of its own/);
+    assert.ok(r.err.includes(".secret-notes"));
+    assert.equal(existsSync(join(t.dir, ".secret-notes")), true);
+    const done = t.run(["remove", "work", "--yes"]);
+    assert.ok(done.out.includes("deleted with it: .claude.json.divergent-1-2-abcdef, .secret-notes"));
+  });
+
+  test("content written while the Keychain was being asked is refused, unlisted and kept", viaKeychain, () => {
+    const t = setup();
+    const late = join(t.dir, "nao-listado.txt");
+    const lateFolder = join(t.dir, "pasta-nova");
+    const r = t.run(["remove", "work", "--yes"], { CC_STUB_DELETE_WRITE: late, CC_STUB_DELETE_MKDIR: lateFolder });
+    refused(
+      r,
+      /the content of "work" changed after it was checked; the Keychain step already ran \(item deleted\); the folder was kept/,
+    );
+    assert.equal(readFileSync(late, "utf8"), "late\n");
+    assert.equal(existsSync(lateFolder), true);
+    assert.equal(existsSync(join(t.dir, "skills")), true);
+  });
+
+  test(
+    "a Claude that starts while the Keychain is being asked is found before the folder goes",
+    viaKeychain,
+    async () => {
+      const t = setup();
+      const child = await idle({ PATH: process.env.PATH, HOME: t.home, CLAUDE_CONFIG_DIR: t.dir });
+      const r = t.run(["remove", "work", "--yes"], {
+        CC_STUB_COUNT: join(root, `count${counter++}`),
+        CC_STUB_COUNT_AFTER: "2",
+        CC_STUB_CLAUDE_PIDS: "",
+        CC_STUB_CLAUDE_PIDS_LATER: String(child.pid),
+      });
+      refused(
+        r,
+        /account "work" is in use by a running Claude; close it first; the Keychain step already ran \(item deleted\); the folder was kept/,
+      );
+      assert.equal(existsSync(t.dir), true);
+    },
+  );
+
+  test("content that changed after the name was typed is refused before the Keychain", () => {
+    const t = setup();
+    assert.throws(
+      () =>
+        inProcess(t, {}, () =>
+          cli.removeAccount(
+            "work",
+            {},
+            {
+              out: sink(),
+              hasTerminal: () => true,
+              answer() {
+                writeFileSync(join(t.dir, "typed-late.txt"), "mine\n");
+                return "work";
+              },
+            },
+          ),
+        ),
+      /the content of the account changed while waiting; nothing was removed/,
+    );
+    assert.equal(existsSync(join(t.dir, "typed-late.txt")), true);
+    assert.deepEqual(t.calls(), []);
+  });
+
+  describe(
+    "a folder it cannot write to is found before the login is deleted",
+    {
+      skip: (process.getuid?.() === 0 && "root can write anywhere") || (process.platform !== "darwin" && "macOS only"),
+    },
+    () => {
+      const locks = [
+        ["the account folder", (t) => t.dir],
+        ["a real folder inside it", (t) => join(t.dir, "cache")],
+        ["the folder that holds the accounts", (t) => join(t.home, ".claude-accounts")],
+      ];
+      for (const [what, where] of locks) {
+        test(what, () => {
+          const t = setup();
+          mkdirSync(join(t.dir, "cache"));
+          writeFileSync(join(t.dir, "cache", "file"), "x\n");
+          const path = where(t);
+          chmodSync(path, 0o500);
+          try {
+            refused(t.run(["remove", "work", "--yes"]), /is not writable; nothing was removed/);
+            assert.deepEqual(t.calls(), [], "the Keychain is not touched");
+            assert.ok(readFileSync(t.keychain, "utf8").includes(service(t.dir)), "the login is still there");
+            assert.equal(readFileSync(join(t.dir, "cache", "file"), "utf8"), "x\n");
+          } finally {
+            chmodSync(path, 0o700);
+          }
+          assert.equal(t.run(["remove", "work", "--yes"]).code, 0);
+        });
+      }
+    },
+  );
+
+  test("a Claude that runs under node, as an npm install does, counts as a running Claude", async () => {
+    const t = setup();
+    const script = join(t.home, "npm", "bin", "claude");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(script, "setTimeout(() => {}, 60000);\n");
+    const child = spawn(
+      "/usr/bin/env",
+      ["-i", `PATH=${process.env.PATH}`, `HOME=${t.home}`, `CLAUDE_CONFIG_DIR=${t.dir}`, process.execPath, script],
+      { stdio: "ignore" },
+    );
+    alive.push(child);
+    for (let i = 0; i < 100; i++) {
+      const r = spawnSync("ps", ["-ww", "-o", "command=", "-p", String(child.pid)], { encoding: "utf8" });
+      if (r.stdout.includes(script)) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
+    refused(r, /account "work" is in use by a running Claude; close it first/);
+    assert.equal(existsSync(t.dir), true);
+    assert.deepEqual(t.calls(), []);
+  });
+
+  test("a node process that is not Claude does not hold an account", async () => {
+    const t = setup();
+    const child = await idle({ PATH: process.env.PATH, HOME: t.home, CLAUDE_CONFIG_DIR: t.dir });
+    const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: String(child.pid) });
+    assert.equal(r.code, 0, r.err);
+  });
+
+  test("isNodeClaude reads the command line of an npm install and nothing else", () => {
+    for (const line of [
+      "node /usr/local/bin/claude",
+      "/opt/node/bin/node /opt/node/bin/claude --resume",
+      "node --no-warnings /x/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+    ]) {
+      assert.equal(cli.isNodeClaude(line), true, line);
+    }
+    for (const line of [
+      "node /x/server.js claude",
+      "node /x/cc-accounts run work claude",
+      "vim /tmp/claude",
+      "claude --resume",
+      "node /x/claude-helper.js",
+      "node",
+    ]) {
+      assert.equal(cli.isNodeClaude(line), false, line);
+    }
+  });
+
   test("a CLAUDE_CONFIG_DIR that does not resolve to a folder is never read as free", async () => {
     const t = setup();
     for (const value of ["relative/dir", "~/.claude-accounts/work", join(t.home, "nowhere"), "."]) {
@@ -1851,14 +2054,18 @@ describe("remove", () => {
       const locked = join(t.dir, "cache");
       mkdirSync(locked);
       writeFileSync(join(locked, "file"), "x\n");
-      chmodSync(locked, 0o500);
       try {
-        const r = t.run(["remove", "work", "--yes"]);
-        refused(
-          r,
+        assert.throws(
+          () =>
+            inProcess(t, {}, () =>
+              cli.removeAccount(
+                "work",
+                { yes: true },
+                { out: sink(), beforeFolderCheck: () => chmodSync(locked, 0o500) },
+              ),
+            ),
           /the folder of "work" could not be removed \(E[A-Z]+\); the Keychain step already ran \(item deleted\)\. Run "cc-accounts remove work --yes" again to finish/,
         );
-        assert.doesNotMatch(r.err, /node:internal|\n\s+at /);
         assert.equal(existsSync(t.dir), true);
       } finally {
         chmodSync(locked, 0o700);
@@ -1918,6 +2125,6 @@ describe("remove", () => {
   });
 
   test("help lists the command", () => {
-    assert.match(cc(newHome(), ["help"]).out, /cc-accounts remove <name> \[--yes\]/);
+    assert.match(cc(newHome(), ["help"]).out, /cc-accounts remove <name> \[--yes\] \[--expect-own=<name,\.\.\.>\]/);
   });
 });

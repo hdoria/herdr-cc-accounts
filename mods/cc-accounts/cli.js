@@ -8,6 +8,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
+  accessSync,
+  constants as fsConstants,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -46,6 +48,7 @@ const SHARING = Object.freeze({
     names: [
       ".credentials.json",
       ".claude.json",
+      ".last-cleanup",
       "sessions",
       "session-env",
       "statsig",
@@ -100,7 +103,7 @@ const SHARING = Object.freeze({
       "uploads",
       "usage-data",
     ],
-    prefixes: [".", "daemon", "agent-memory"],
+    prefixes: ["daemon", "agent-memory"],
   },
   // Copied from ~/.claude.json into <account>/.claude.json, merged.
   state: {
@@ -282,9 +285,20 @@ export function keychainUser(env = process.env) {
   return KEYCHAIN_USER.test(user) ? user : FALLBACK_USER;
 }
 
+// A folder that cannot be looked into says nothing about the login file, so it counts as "no file" for that
+// account only and the Keychain answers; it must not stop `ls` for every other account.
+/** @param {string} path */
+function hasLoginFile(path) {
+  try {
+    return lstatOrNull(path) !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** @param {{ dir: string | null }} account */
 function isSignedIn({ dir }) {
-  if (lstatOrNull(join(dir ?? sourceDir(), ".credentials.json")) !== null) return true;
+  if (hasLoginFile(join(dir ?? sourceDir(), ".credentials.json"))) return true;
   if (process.platform !== "darwin") return false;
   return (
     spawnSync("security", ["find-generic-password", "-s", keychainService(dir), "-a", keychainUser()], {
@@ -336,6 +350,19 @@ function emailOf(statePath) {
   } catch {
     return null;
   }
+}
+
+// An account's own .claude.json is a plain file. A link there points at some other file (as `sync` also holds),
+// whose email is not this account's, so it is not read.
+/** @param {string} dir */
+function accountEmail(dir) {
+  const path = join(dir, ".claude.json");
+  try {
+    if (lstatSync(path).isSymbolicLink()) return null;
+  } catch {
+    return null;
+  }
+  return emailOf(path);
 }
 
 // ---- state copied from ~/.claude.json ----
@@ -667,7 +694,7 @@ function cmdLs(args) {
     : listAccounts().map(({ name, dir }) => ({
         name,
         dir,
-        email: emailOf(dir ? join(dir, ".claude.json") : sourceState()),
+        email: dir ? accountEmail(dir) : emailOf(sourceState()),
         signedIn: isSignedIn({ dir }),
         divergent: dir ? ownOrNone(dir) : [],
       }));
@@ -907,6 +934,7 @@ const KEYCHAIN_NOT_FOUND = 44;
 const KEYCHAIN_TIMEOUT_MS = 60_000;
 const PROBE_TIMEOUT_MS = 5_000;
 const MAX_PROCESSES = 200;
+const MAX_FOLDERS = 20_000;
 const MAX_ANSWER_BYTES = 256;
 
 // A name as it is shown and compared: whatever is not plain printable ASCII, a backslash or a comma becomes
@@ -975,6 +1003,15 @@ function pgrepPids(args) {
   return r.status === 1 ? [] : r.stdout.split("\n").filter((line) => /^\d+$/.test(line));
 }
 
+// An install through npm runs as `node <prefix>/bin/claude` or `node .../claude-code/cli.js`, so its process is
+// called `node`, not `claude`. `pgrep -f` finds the candidates and the command line decides. A script path with a
+// space in it is not recognized.
+const NODE_CLAUDE_CANDIDATE = "claude( |$)|claude-code/cli\\.js";
+const NODE_CLAUDE = /^(\S*\/)?node(\.exe)?\s+(-\S+\s+)*\S*(\/claude|claude-code\/cli\.js)(\s|$)/;
+
+/** @param {string} line the command line of a process */
+export const isNodeClaude = (line) => NODE_CLAUDE.test(line.trim());
+
 // Whether a live process of this user runs in the account folder, read as `which` reads it: the environment of
 // every `claude` process and of the children of every `cc-accounts run` wrapper. Whatever cannot be read is
 // "unknown", never "free".
@@ -986,9 +1023,15 @@ function accountUse(real) {
   const owner = process.getuid ? ["-u", String(process.getuid())] : [];
   const claudes = pgrepPids([...owner, "-x", "claude"]);
   const wrappers = pgrepPids([...owner, "-f", "cc-accounts run"]);
-  if (claudes === null || wrappers === null)
+  const scripts = pgrepPids([...owner, "-f", NODE_CLAUDE_CANDIDATE]);
+  if (claudes === null || wrappers === null || scripts === null)
     return { state: "unknown", why: "the running processes could not be listed" };
+  if (scripts.length > MAX_PROCESSES) return { state: "unknown", why: "too many candidate processes to check" };
   const pids = new Set(claudes);
+  for (const pid of scripts) {
+    const line = psLine(["-ww", "-o", "command=", "-p", pid]);
+    if (line !== null && isNodeClaude(line)) pids.add(pid);
+  }
   for (const pid of wrappers) {
     const line = psLine(["-ww", "-o", "command=", "-p", pid]);
     if (line === null) continue;
@@ -1124,10 +1167,15 @@ function identityOf(dir) {
 /**
  * @param {string} name
  * @param {{ yes?: boolean, expectOwn?: string[] | null }} [options]
- * @param {{ out?: Output, answer?: () => string, keychainTimeoutMs?: number, beforeFolderCheck?: () => void }} [hooks]
+ * @param {{ out?: Output, answer?: () => string, hasTerminal?: () => boolean, keychainTimeoutMs?: number, beforeFolderCheck?: () => void }} [hooks]
  */
 export function removeAccount(name, { yes = false, expectOwn = null } = {}, hooks = {}) {
-  const { out = process.stdout, answer = readAnswer, keychainTimeoutMs = KEYCHAIN_TIMEOUT_MS } = hooks;
+  const {
+    out = process.stdout,
+    answer = readAnswer,
+    hasTerminal = () => isatty(0) && isatty(1),
+    keychainTimeoutMs = KEYCHAIN_TIMEOUT_MS,
+  } = hooks;
   validateName(name);
   assertSafeRoot();
   const dir = listAccounts().find((a) => a.name === name)?.dir;
@@ -1147,7 +1195,8 @@ export function removeAccount(name, { yes = false, expectOwn = null } = {}, hook
         "Copy what you want to keep, then run again with --yes",
     );
   }
-  if (!yes && !(isatty(0) && isatty(1))) {
+  assertDeletable(dir, accountsRoot());
+  if (!yes && !hasTerminal()) {
     throw new CliError(`no terminal to confirm on; run again with --yes to remove "${name}"`);
   }
   assertNotInUse(name, real);
@@ -1172,6 +1221,14 @@ export function removeAccount(name, { yes = false, expectOwn = null } = {}, hook
     );
   }
   try {
+    if (ownContent(dir).join(",") !== own.join(",")) {
+      throw new CliError(`the content of "${name}" changed after it was checked`);
+    }
+    assertNotInUse(name, real);
+  } catch (e) {
+    throw new CliError(`${messageOf(e)}; the Keychain step already ran (${keychain}); the folder was kept`);
+  }
+  try {
     rmSync(dir, { recursive: true });
   } catch (e) {
     const code = e instanceof Error && "code" in e ? String(e.code) : "unknown error";
@@ -1182,6 +1239,41 @@ export function removeAccount(name, { yes = false, expectOwn = null } = {}, hook
   }
   out.write(`removed account ${name}\n  folder: ${short(dir)}\n  keychain: ${keychain}\n`);
   if (own.length > 0) out.write(`  deleted with it: ${own.join(", ")}\n`);
+}
+
+// Deleting a folder needs write access to it, to each real folder inside it and to the folder that holds it.
+// It is looked at before the Keychain is touched, because the login is gone for good once that step ran. Links
+// are not followed (a link is removed, not entered), and a folder that cannot be listed is as good as locked.
+/**
+ * @param {string} dir
+ * @param {string} root
+ */
+function assertDeletable(dir, root) {
+  /** @param {string} path */
+  const locked = (path) => new CliError(`${printable(short(path))} is not writable; nothing was removed`);
+  /** @param {string} path */
+  const writable = (path) => {
+    try {
+      accessSync(path, fsConstants.W_OK | fsConstants.X_OK);
+    } catch {
+      throw locked(path);
+    }
+  };
+  writable(root);
+  const pending = [dir];
+  for (let seen = 0; pending.length > 0; seen++) {
+    if (seen >= MAX_FOLDERS) throw new CliError("too many folders to check; nothing was removed");
+    const path = pending.pop() ?? dir;
+    writable(path);
+    /** @type {import("node:fs").Dirent[]} */
+    let entries;
+    try {
+      entries = readdirSync(path, { withFileTypes: true });
+    } catch {
+      throw locked(path);
+    }
+    for (const entry of entries) if (entry.isDirectory()) pending.push(join(path, entry.name));
+  }
 }
 
 /**
@@ -1208,7 +1300,8 @@ usage:
   cc-accounts ls [--json]        list accounts: email, login status and folder
   cc-accounts add <name>         create an account and apply the sharing table
   cc-accounts sync [<name>]      reapply links and state (idempotent)
-  cc-accounts remove <name> [--yes]  delete an account: its folder and its Keychain item
+  cc-accounts remove <name> [--yes] [--expect-own=<name,...>]
+                                 delete an account: its folder and its Keychain item
   cc-accounts run <name> [args]  open claude in an account (default uses ~/.claude)
   cc-accounts which <pid>...     print "<pid> <account>" per claude process, "unknown" if not known
   cc-accounts demo on|off        list sample accounts instead of yours, for screenshots
