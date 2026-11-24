@@ -11,7 +11,7 @@
 <a href="#requirements"><img src="https://img.shields.io/badge/macOS-18332E?style=for-the-badge&logo=apple&logoColor=79B9A5" alt="macOS" /></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-18332E?style=for-the-badge" alt="MIT license" /></a>
 <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522-18332E?style=for-the-badge&logo=nodedotjs&logoColor=79B9A5" alt="Node 22 or newer" /></a>
-<a href="https://github.com/hdoria/herdr-cc-accounts/actions/workflows/ci.yml"><img src="https://github.com/hdoria/herdr-cc-accounts/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+<a href="https://github.com/hdoria/herdr-cc-accounts/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/hdoria/herdr-cc-accounts/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=79B9A5" alt="CI status" /></a>
 
 <br/><br/>
 
@@ -27,7 +27,7 @@ A button in the tab bar opens a panel that shows which account each pane uses, a
 
 I work with separate Claude Code accounts: the company's, a client's and my own. By default Claude Code keeps one login for the whole machine, and `/login` in one pane changes the account of every other pane and of every Claude started afterwards.
 
-So I logged out and back in several times a day. Each switch also moved the sessions I already had open, and they went on in the wrong account.
+So I logged out and back in several times a day, and every switch changed the account for the whole machine, not just for the pane I was looking at.
 
 The tools I found work at the same level. Some swap the global credential, so only one account is live at a time. Others copy the OAuth token and refresh it, which makes them hold a secret I would rather nothing touched. cc-accounts gives each account its own folder and leaves the login where Claude Code put it.
 
