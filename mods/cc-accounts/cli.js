@@ -86,11 +86,9 @@ const SHARING = Object.freeze({
       "loop.md",
       "mcp-discovery-cache",
       "mcp-skill-archives",
-      "policy-limits.json",
       "project-settings",
       "remote",
       "remote-control",
-      "remote-settings.json",
       "scratch",
       "seed-admin",
       "server-sessions.json",
@@ -104,7 +102,7 @@ const SHARING = Object.freeze({
       "uploads",
       "usage-data",
     ],
-    prefixes: ["daemon", "agent-memory"],
+    prefixes: ["daemon", "agent-memory", "policy-limits.json", "remote-settings.json"],
   },
   // Copied from ~/.claude.json into <account>/.claude.json, merged.
   state: {

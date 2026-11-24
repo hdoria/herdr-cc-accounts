@@ -1760,6 +1760,22 @@ describe("remove", () => {
     assert.equal(existsSync(t.dir), false);
   });
 
+  test("the policy and remote settings files Claude Code writes, with any suffix, are not content of its own", () => {
+    const t = setup();
+    const written = [
+      "policy-limits.json",
+      "policy-limits.json.signature.json",
+      "policy-limits.json.stamp.json",
+      "remote-settings.json",
+      "remote-settings.json.signature.json",
+      "remote-settings.json.synced-at",
+      "telemetry",
+    ];
+    for (const name of written) writeFileSync(join(t.dir, name), "x\n");
+    writeFileSync(join(t.dir, "policy-notes.txt"), "mine\n");
+    assert.deepEqual(ownOf(t), ["policy-notes.txt"]);
+  });
+
   test("own content is listed by a printable name, one that cannot split the list or reach the terminal raw", () => {
     const dir = join(root, `own${counter++}`);
     mkdirSync(dir);
