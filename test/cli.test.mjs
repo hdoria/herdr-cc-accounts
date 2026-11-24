@@ -1371,6 +1371,12 @@ describe("isRunWrapper", () => {
     assert.equal(cli.isRunWrapper(`node ${BIN} ls`, BIN), false);
     assert.equal(cli.isRunWrapper(`node --no-warnings ${BIN} run work --resume x`, BIN), true);
     assert.equal(cli.isRunWrapper("node /elsewhere/cc-accounts run work", BIN), false);
+    assert.equal(
+      cli.isRunWrapper(`node ${join(MOD, "cli.js")} run work`),
+      true,
+      "cli.js next to the entry is this copy",
+    );
+    assert.equal(cli.isRunWrapper(`node ${BIN} run work`), true, "so is the entry");
   });
 });
 
@@ -1998,6 +2004,56 @@ describe("remove", () => {
     const pids = Array.from({ length: 201 }, (_, i) => i + 1).join(" ");
     const r = t.run(["remove", "work", "--yes"], { CC_STUB_NODE_PIDS: pids });
     refused(r, /cannot tell whether account "work" is in use \(too many candidate processes to check\)/);
+    assert.equal(existsSync(t.dir), true);
+  });
+
+  // A process whose command line is a `cc-accounts run <name>` of some copy, with no claude under it yet.
+  async function bareWrapper(t, entry, name) {
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", entry, "run", name], {
+      env: { HOME: t.home, PATH: process.env.PATH },
+      stdio: "ignore",
+    });
+    alive.push(child);
+    for (let i = 0; i < 100; i++) {
+      const r = spawnSync("ps", ["-ww", "-o", "command=", "-p", String(child.pid)], { encoding: "utf8" });
+      if (r.stdout.includes(` run ${name}`)) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return child;
+  }
+
+  test("a wrapper of another copy that has no claude yet holds only the account it names", async () => {
+    const t = setup();
+    cc(t.home, ["add", "other"]);
+    const wrapper = await bareWrapper(t, "/another/copy/cc-accounts", "work");
+    const stubs = { CC_STUB_WRAPPER_PIDS: String(wrapper.pid) };
+    refused(t.run(["remove", "work", "--yes"], stubs), /account "work" is in use by a running Claude; close it first/);
+    assert.equal(existsSync(t.dir), true);
+    const done = t.run(["remove", "other", "--yes"], stubs);
+    assert.equal(done.code, 0, done.err);
+    assert.equal(existsSync(join(t.home, ".claude-accounts", "other")), false);
+  });
+
+  test("a wrapper of this copy, started through the entry, and one that names no account are told apart", async () => {
+    const t = setup();
+    cc(t.home, ["add", "other"]);
+    const own = await bareWrapper(t, BIN, "work");
+    refused(
+      t.run(["remove", "work", "--yes"], { CC_STUB_WRAPPER_PIDS: String(own.pid) }),
+      /account "work" is in use by a running Claude/,
+    );
+    assert.equal(t.run(["remove", "other", "--yes"], { CC_STUB_WRAPPER_PIDS: String(own.pid) }).code, 0);
+    const missing = await bareWrapper(t, "/another/copy/cc-accounts", "nobody");
+    assert.equal(t.run(["remove", "work", "--yes"], { CC_STUB_WRAPPER_PIDS: String(missing.pid) }).code, 0);
+  });
+
+  test("a wrapper without a claude and with a name that cannot be read is unknown", async () => {
+    const t = setup();
+    const wrapper = await bareWrapper(t, "/another/copy/cc-accounts", "Not_A_Name");
+    refused(
+      t.run(["remove", "work", "--yes"], { CC_STUB_WRAPPER_PIDS: String(wrapper.pid) }),
+      /cannot tell whether account "work" is in use \(a "cc-accounts run" wrapper has no claude to read yet\)/,
+    );
     assert.equal(existsSync(t.dir), true);
   });
 

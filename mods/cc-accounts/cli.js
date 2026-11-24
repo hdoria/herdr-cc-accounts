@@ -25,6 +25,7 @@ import {
 import { constants as osConstants, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { isatty } from "node:tty";
+import { fileURLToPath } from "node:url";
 import { ACCOUNT_NAME, DEFAULT_ACCOUNT as DEFAULT, nameProblem } from "./model.js";
 
 // What each entry of ~/.claude becomes inside an account. The single source of truth.
@@ -824,18 +825,28 @@ const WRAPPER_STARTS = 4;
 
 export const entryScript = () => realpathOrNull(process.argv[1] ?? "");
 
+// This copy as a wrapper's argv can name it: the entry `cc-accounts` or the `cli.js` next to it, whichever the
+// process that is asking was started through.
+const ownScripts = () => [
+  entryScript(),
+  realpathOrNull(join(dirname(fileURLToPath(import.meta.url)), "cc-accounts")),
+  realpathOrNull(fileURLToPath(import.meta.url)),
+];
+
 /**
  * @param {string} argvLine
- * @param {string | null} [self]
+ * @param {string | null | (string | null)[]} [self]
  */
-export function isRunWrapper(argvLine, self = entryScript()) {
-  if (!self) return false;
+export function isRunWrapper(argvLine, self = ownScripts()) {
+  const own = [self].flat().filter((path) => path !== null);
+  if (own.length === 0) return false;
   let at = argvLine.indexOf(" run ");
   for (let marker = 0; at !== -1 && marker < WRAPPER_MARKERS; marker++, at = argvLine.indexOf(" run ", at + 1)) {
     const head = argvLine.slice(0, at);
     let space = head.indexOf(" ");
     for (let start = 0; space !== -1 && start < WRAPPER_STARTS; start++, space = head.indexOf(" ", space + 1)) {
-      if (realpathOrNull(head.slice(space + 1)) === self) return true;
+      const path = realpathOrNull(head.slice(space + 1));
+      if (path !== null && own.includes(path)) return true;
     }
   }
   return false;
@@ -844,6 +855,15 @@ export function isRunWrapper(argvLine, self = entryScript()) {
 // A wrapper of some other copy of the CLI: its environment names no account either, so `default` would be a
 // guess. Only the end of the path is looked at, which also catches a copy in a folder with spaces.
 const OTHER_WRAPPER = /(?:^|[\s/])cc-accounts run(?:\s|$)/;
+
+// The account a wrapper that has no claude yet is about: the real folder of the name after `run`, "" when no such
+// account exists (the wrapper then fails and starts nothing), null when the name cannot be read.
+/** @param {string} line */
+function wrapperAccount(line) {
+  const name = /(?:^|[\s/])cc-accounts run (\S+)/.exec(line)?.[1] ?? / run (\S+)/.exec(line)?.[1];
+  if (name === undefined || !ACCOUNT_NAME.test(name)) return null;
+  return knownAccounts().find((a) => a.name === name || (name === DEFAULT && a.dir === null))?.real ?? "";
+}
 
 // The wrapper's own environment says nothing: the account is set only in the environment of the claude it
 // starts. So the answer comes from its children, and only when they all agree on a known account.
@@ -1031,15 +1051,17 @@ function accountUse(real) {
   const certain = new Set(claudes);
   for (const pid of wrappers) {
     const line = psLine(["-ww", "-o", "command=", "-p", pid]);
-    if (line === null) continue;
-    if (!isRunWrapper(line)) {
-      if (OTHER_WRAPPER.test(line)) return { state: "unknown", why: 'a "cc-accounts run" of another copy is running' };
+    if (line === null || !(isRunWrapper(line) || OTHER_WRAPPER.test(line))) continue;
+    const children = pgrepPids(["-P", pid]);
+    if (children === null) return { state: "unknown", why: "the running processes could not be listed" };
+    if (children.length > 0) {
+      for (const child of children) certain.add(child);
       continue;
     }
-    const children = pgrepPids(["-P", pid]);
-    if (children === null || children.length === 0)
-      return { state: "unknown", why: 'a "cc-accounts run" wrapper has no claude to read yet' };
-    for (const child of children) certain.add(child);
+    // No claude yet: the name in its arguments says which account it is about, the same way for every copy.
+    const wrapped = wrapperAccount(line);
+    if (wrapped === null) return { state: "unknown", why: 'a "cc-accounts run" wrapper has no claude to read yet' };
+    if (wrapped === real) return { state: "busy" };
   }
   const pids = new Set([...certain, ...candidates]);
   if (pids.size > MAX_PROCESSES) return { state: "unknown", why: "too many claude processes to check" };
